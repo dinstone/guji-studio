@@ -19,7 +19,6 @@ env:
   WAILS_VERSION: v3.0.0-beta.4
   GO_VERSION: '1.25'
   NODE_VERSION: '20'
-  PNPM_VERSION: '9'
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -30,18 +29,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
+        run: npm ci --prefix frontend
       - name: Frontend type-check
-        run: pnpm --dir frontend exec vue-tsc --noEmit
+        run: npm --prefix frontend exec vue-tsc --noEmit
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -64,19 +60,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Install wails3 CLI
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
       - name: Add GOBIN to PATH
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
         shell: bash
       - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
+        run: npm ci --prefix frontend
       # universal 一次构建（arm64+amd64 合并二进制），再 lipo 拆成单架构 .app
       - name: Build universal .app
         run: wails3 task darwin:package:universal
@@ -120,12 +115,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Install wails3 CLI
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
       - name: Add GOBIN to PATH
@@ -134,7 +128,7 @@ jobs:
       - name: Install NSIS
         run: choco install nsis -y
       - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
+        run: npm ci --prefix frontend
       - name: Build & package installer
         shell: bash
         run: |
