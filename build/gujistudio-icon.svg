@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- 宣纸方底（纯色，扁平） -->
+  <rect x="112" y="112" width="800" height="800" rx="224" fill="#f5eee0"/>
+
+
+  <!-- 米字格外框（墨色） -->
+  <rect x="252" y="252" width="520" height="520" rx="18" fill="none" stroke="#2b2622" stroke-width="12"/>
+
+  <!-- 米字格虚线（朱红）：十字 + 对角 -->
+  <g stroke="#b5302a" stroke-width="8" stroke-dasharray="20 18" stroke-linecap="round">
+    <line x1="512" y1="252" x2="512" y2="772"/>
+    <line x1="252" y1="512" x2="772" y2="512"/>
+    <line x1="290" y1="290" x2="734" y2="734"/>
+    <line x1="734" y1="290" x2="290" y2="734"/>
+  </g>
+
+  <!-- 中心墨色「書」 -->
+  <text x="512" y="524" font-family="'Songti SC','STSong','Noto Serif CJK SC','SimSun',serif"
+        font-size="440" fill="#2b2622" text-anchor="middle" dominant-baseline="central">書</text>
+</svg>
