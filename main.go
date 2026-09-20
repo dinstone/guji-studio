@@ -95,6 +95,11 @@ func main() {
 		MinWidth:       800,
 		MinHeight:      450,
 		EnableFileDrop: true, // 欢迎页支持拖入文件夹 / .gvs 文件直接打开
+		// Windows：去掉原生标题栏/边框，标题栏改由前端自绘（WindowControls.vue 的最小化/最大化/关闭）。
+		// beta.4 的无框仍保留 WS_OVERLAPPEDWINDOW（仅用 WM_NCCALCSIZE 裁掉非客户区），
+		// 所以拖拽缩放边框、Aero 吸边、最小/最大化动画都不受影响。
+		// macOS 保持原生隐藏式标题栏（左上交通灯），故不启用 Frameless。
+		Frameless: runtime.GOOS == "windows",
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTranslucent,
@@ -153,9 +158,15 @@ func setupAppMenu(app *application.App, win *application.WebviewWindow) {
 	m.AddRole(application.WindowMenu)
 	m.AddRole(application.HelpMenu)
 
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		app.Menu.SetApplicationMenu(m)
-	} else {
+	case "linux":
 		win.SetMenu(m)
 	}
+	// Windows 不挂窗口菜单：窗口是无框的（见上面 Frameless），wails 的
+	// windowsWebviewWindow.setMenu 仍会调用 Win32 SetMenu 把菜单条贴到窗口上，
+	// 而 WM_NCCALCSIZE 已把整窗当作客户区，菜单条会与自绘标题栏（App.vue 的 .dragbar）重叠。
+	// 菜单项对应的能力都有应用内入口：关于/赞助在左侧系统栏（SystemRail），
+	// 编辑类快捷键由 WebView2 内建支持。
 }

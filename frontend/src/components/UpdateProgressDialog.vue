@@ -4,9 +4,30 @@ import { updateProgress, downloadVer, closeDownload } from '../stores/app'
 
 const version = __APP_VERSION__
 
+function fmtBytes(n: number): string {
+  if (!n && n !== 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let i = 0
+  let v = n
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
+  return `${v.toFixed(i ? 1 : 0)} ${units[i]}`
+}
+function fmtSpeed(n: number): string {
+  if (!n) return '0 B/s'
+  const units = ['B/s', 'KB/s', 'MB/s']
+  let i = 0
+  let v = n
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
+  return `${v.toFixed(1)} ${units[i]}`
+}
+
 // 进行中：尚未成功也未失败（含 devReady 之前的下载/校验/安装阶段）。
 const busy = computed(() =>
   updateProgress.value.active && !updateProgress.value.error && !updateProgress.value.devReady,
+)
+// 下载阶段且有总大小时显示真实进度条（与 wails 内置窗口一致）。
+const showBar = computed(() =>
+  busy.value && updateProgress.value.total > 0,
 )
 // 终态标题：失败 / 已就绪（dev 手动重启）/ 即将重启。
 const title = computed(() => {
@@ -29,8 +50,19 @@ const title = computed(() => {
       </div>
 
       <div class="udl-body">
-        <!-- 进行中：旋转进度 + 阶段文案 -->
-        <div v-if="busy" class="udl-prog">
+        <!-- 下载中且有字节进度：进度条 + 百分比 + 已下载/总大小 + 速度 -->
+        <div v-if="showBar" class="udl-progress">
+          <div class="udl-bar">
+            <div class="udl-fill" :style="{ width: updateProgress.percent + '%' }"></div>
+          </div>
+          <div class="udl-meta">
+            <span>{{ updateProgress.percent }}% · {{ fmtBytes(updateProgress.written) }} of {{ fmtBytes(updateProgress.total) }}</span>
+            <span>{{ fmtSpeed(updateProgress.rate) }}</span>
+          </div>
+        </div>
+
+        <!-- 进行中：旋转进度 + 阶段文案（无字节进度或校验/安装阶段） -->
+        <div v-else-if="busy" class="udl-prog">
           <i class="udl-spin"></i>
           <span>{{ updateProgress.stage || '正在更新…' }}</span>
         </div>
@@ -106,4 +138,10 @@ const title = computed(() => {
 
 .udl-spin { width: 16px; height: 16px; border: 2px solid #0f6e56; border-top-color: transparent; border-radius: 50%; animation: udl-spin .7s linear infinite; flex: none; }
 @keyframes udl-spin { to { transform: rotate(360deg); } }
+
+/* 下载进度条：与 wails 内置窗口同结构 */
+.udl-progress { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.udl-bar { height: 6px; background: #eae7dd; border-radius: 3px; overflow: hidden; }
+.udl-fill { height: 100%; background: #0f6e56; border-radius: 3px; transition: width .2s linear; }
+.udl-meta { display: flex; justify-content: space-between; font-size: 12px; color: #6f6c63; }
 </style>

@@ -15,6 +15,7 @@ import AboutDialog from './components/AboutDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
 import UpdateProgressDialog from './components/UpdateProgressDialog.vue'
 import ProjectSwitcher from './components/ProjectSwitcher.vue'
+import WindowControls from './components/WindowControls.vue'
 import { view, toastMsg, boot, projectLoaded, booting, welcomeOpen, editorWidth, projectInfoOpen, closeProjectInfo, aboutOpen, updateOpen, downloadOpen } from './stores/app'
 
 /* macOS 左上角有红黄绿「交通灯」窗口控制按钮（约占据窗口左起 0~70px），
@@ -100,6 +101,9 @@ function startResize(e: MouseEvent) {
     </div>
   </div>
   <!-- 全局层：toast 与应用内弹窗在任何分支（含欢迎页）都可见 -->
+  <!-- Windows 无框窗口的自绘控制按钮：挂在根层，任何视图（载入态/欢迎页/工作室）都常驻可点，
+       高度与各视图 .dragbar 对齐（见 --titlebar-h），非 Windows 下自身不渲染。 -->
+  <WindowControls />
   <WelcomeScreen v-if="welcomeOpen && projectLoaded" dismissable />
   <ProjectInfoDialog v-if="projectInfoOpen" />
   <AboutDialog v-if="aboutOpen" />
@@ -110,7 +114,9 @@ function startResize(e: MouseEvent) {
 </template>
 
 <style>
-:root { color-scheme: light; }
+/* --titlebar-h：标题栏高度唯一真源。App.vue / WelcomeScreen.vue 的 .dragbar 与
+   Windows 自绘窗口按钮（WindowControls.vue）都取它，改一处即可整体对齐。 */
+:root { color-scheme: light; --titlebar-h: 40px; }
 * { box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
 body { margin: 0; font-family: -apple-system, 'PingFang SC', sans-serif; font-size: 13px; color: #2c2c2a; }
@@ -119,11 +125,12 @@ body { margin: 0; font-family: -apple-system, 'PingFang SC', sans-serif; font-si
 /* 图书视图：纵向列布局——上方横向排各面板，底部状态栏为正常 flex 项，仅在此视图出现 */
 .book-view { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .book-main { flex: 1; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
-/* Frameless 窗口拖动 header：--wails-draggable 走 DOM 拖动（macOS 有效），
-   --wails-non-client-region 走 Windows 原生命中测试（NonClientRegionSupport）。
-   子元素会继承这两个属性，需要交互的控件须用 no-drag 覆盖。 */
+/* Frameless 窗口拖动 header：运行时（@wailsio/runtime 的 drag 模块）读取 --wails-draggable
+   做窗口拖动，macOS / Windows 无框窗口共用同一条路径。子元素会继承该属性，
+   需要交互的控件（项目切换器、Windows 窗口按钮）须用 no-drag 覆盖。
+   右侧的窗口控制按钮由根层 WindowControls.vue 固定定位覆盖在本栏右上角。 */
 .dragbar {
-  height: 40px; flex: none; position: relative; z-index: 40;
+  height: var(--titlebar-h); flex: none; position: relative; z-index: 40;
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
   gap: 12px; padding: 0 14px;
   background: #f5f3ec; border-bottom: 0.5px solid #ddd9cc;

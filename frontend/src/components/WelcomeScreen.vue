@@ -133,7 +133,8 @@ async function onDrop(e: DragEvent) {
 }
 .close:hover { background: #f1efe8; color: #2c2c2a; }
 .dragbar {
-  position: absolute; top: 0; left: 0; right: 0; height: 40px;
+  /* 高度取全局 --titlebar-h（App.vue :root），与 Windows 自绘窗口按钮同一真源 */
+  position: absolute; top: 0; left: 0; right: 0; height: var(--titlebar-h, 40px);
   display: flex; align-items: center; padding: 0 14px;
   background: #f5f3ec; border-bottom: 0.5px solid #ddd9cc;
   --wails-draggable: drag;

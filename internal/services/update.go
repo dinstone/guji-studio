@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,6 +91,49 @@ func releaseURL(rel *updater.Release) string {
 		return u
 	}
 	return ""
+}
+
+// friendlyUpdateError 把 updater 抛出的技术化错误翻译成用户能懂的中文提示。
+// 原始错误仍写进日志，前端只展示 friendly 文案。
+func friendlyUpdateError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(lower, "context deadline exceeded") {
+		return "下载超时，请检查网络连接或稍后重试"
+	}
+	if strings.Contains(lower, "client.timeout") && strings.Contains(lower, "reading body") {
+		return "下载超时，请检查网络连接或稍后重试"
+	}
+	if strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out") {
+		return "网络连接超时，请检查网络后重试"
+	}
+	if strings.Contains(lower, "connection refused") {
+		return "无法连接到更新服务器，请检查网络或代理设置"
+	}
+	if strings.Contains(lower, "connection reset") || strings.Contains(lower, "reset by peer") {
+		return "网络连接被重置，请检查网络或稍后重试"
+	}
+	if strings.Contains(lower, "no such host") || strings.Contains(lower, "dial tcp") {
+		return "无法访问更新服务器，请检查网络连接"
+	}
+	if strings.Contains(lower, "checksum") || strings.Contains(lower, "digest") || strings.Contains(lower, "verification failed") {
+		return "更新包校验失败，请稍后重试"
+	}
+	if strings.Contains(lower, "signature") {
+		return "更新包签名验证失败，请稍后重试"
+	}
+	if strings.Contains(lower, "no pending release") {
+		return "未找到可下载的更新，请先检查更新"
+	}
+	if strings.Contains(lower, "not configured") || strings.Contains(lower, "updater not initialised") {
+		return "更新器未初始化"
+	}
+	// 兜底：保留原始错误，避免信息丢失。
+	return "更新失败：" + msg
 }
 
 // UpdateService 驱动后台更新检查并把「发现新版」推给前端。
@@ -196,7 +241,7 @@ func (s *UpdateService) InstallUpdate() error {
 		if err := updaterRef.DownloadAndInstall(ctx); err != nil {
 			log.Printf("[updater] download/install failed: %v", err)
 			if appRef != nil {
-				appRef.Event.Emit("guji:update:finished", map[string]any{"error": err.Error()})
+				appRef.Event.Emit("guji:update:finished", map[string]any{"error": friendlyUpdateError(err)})
 			}
 			return
 		}
@@ -213,7 +258,7 @@ func (s *UpdateService) InstallUpdate() error {
 		if err := updaterRef.Restart(ctx); err != nil {
 			log.Printf("[updater] restart failed: %v", err)
 			if appRef != nil {
-				appRef.Event.Emit("guji:update:finished", map[string]any{"error": err.Error()})
+				appRef.Event.Emit("guji:update:finished", map[string]any{"error": friendlyUpdateError(err)})
 			}
 		}
 	}()
@@ -237,7 +282,7 @@ func (s *UpdateService) CheckUpdate() *CheckUpdateResult {
 	rel, err := updaterRef.Check(ctx)
 	if err != nil {
 		log.Printf("[updater] check failed: %v", err)
-		return &CheckUpdateResult{Error: err.Error()}
+		return &CheckUpdateResult{Error: friendlyUpdateError(err)}
 	}
 	if rel == nil {
 		result := &CheckUpdateResult{HasUpdate: false}
@@ -259,9 +304,13 @@ func (s *UpdateService) CheckUpdate() *CheckUpdateResult {
 
 // UpdaterHTTPClient 返回针对 GitHub 在部分地区不稳定而调优的 *http.Client：
 // 读取标准代理环境变量，并对瞬时失败（含 5xx）做退避重试。
+//
+// Timeout 设为 0（参考 ../mdx）：不使用 client 级别的 body 读超时，完全由调用方传入的
+// context 控制取消。这样下载大更新包时不会因为读 body 慢而在 60 秒被截断，避免
+// "context deadline exceeded (Client.Timeout or context cancellation while reading body)"。
 func UpdaterHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout: 0,
 		Transport: &retryTransport{
 			next:    &http.Transport{Proxy: http.ProxyFromEnvironment},
 			retries: 5,

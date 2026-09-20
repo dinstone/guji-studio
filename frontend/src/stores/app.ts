@@ -819,10 +819,20 @@ export const updateOpen = ref(false)
 export const updateResult = ref<CheckUpdateResult | null>(null)
 export function openUpdate(r: CheckUpdateResult) { updateResult.value = r; updateOpen.value = true; downloadVer.value = r.version }
 
-// 更新进行中状态：由 wails updater headless 进度事件驱动，状态栏常驻显示「更新中」。
-// WindowNone 模式下 wails 不弹原生更新窗口，进度只能靠这些事件回传前端。
-export const updateProgress = ref<{ active: boolean; stage: string; devReady: boolean; error: string }>({
+// 更新进行中状态：由 wails updater headless 进度事件驱动。
+// WindowNone 模式下 wails 不弹原生更新窗口，进度/速度/百分比靠 wails:updater:download-progress 回传。
+export const updateProgress = ref<{
+  active: boolean
+  stage: string
+  devReady: boolean
+  error: string
+  written: number
+  total: number
+  rate: number
+  percent: number
+}>({
   active: false, stage: '', devReady: false, error: '',
+  written: 0, total: 0, rate: 0, percent: 0,
 })
 
 // 应用下载窗口：点「立即更新」后统一展示下载 / 安装进度。
@@ -1238,7 +1248,10 @@ export async function watchExternalOpen() {
     // 事件名在前端是否可达；同时保留 wails 内部事件作为补充/兜底。
     const onUpdStarted = () => {
       // 点「立即更新」后统一弹出应用下载窗口（自动弹窗 / 关于页共用）。
-      updateProgress.value = { active: true, stage: '正在下载更新…', devReady: false, error: '' }
+      updateProgress.value = {
+        active: true, stage: '正在下载更新…', devReady: false, error: '',
+        written: 0, total: 0, rate: 0, percent: 0,
+      }
       if (updateResult.value?.version) downloadVer.value = updateResult.value.version
       downloadOpen.value = true
     }
@@ -1246,25 +1259,42 @@ export async function watchExternalOpen() {
       const data = e?.data || {}
       if (data.error) {
         // 终态：active 复位，避免「检查更新」按钮被全局进度态永久禁用（下载窗口仍开，显示失败原因）
-        updateProgress.value = { active: false, stage: '更新失败', devReady: false, error: String(data.error || '') }
+        updateProgress.value = { ...updateProgress.value, active: false, stage: '更新失败', devReady: false, error: String(data.error || '') }
         toast('更新失败：' + (data.error || ''))
       } else if (data.devReady) {
         // 开发模式不自动重启：提示手动重启；进度结束 active 复位，关于页「检查更新」可再次点击
-        updateProgress.value = { active: false, stage: '已下载完成，请手动重启应用', devReady: true, error: '' }
+        updateProgress.value = { ...updateProgress.value, active: false, stage: '已下载完成，请手动重启应用', devReady: true, error: '' }
       } else {
-        updateProgress.value = { active: true, stage: '更新完成，即将重启…', devReady: false, error: '' }
+        updateProgress.value = { ...updateProgress.value, active: true, stage: '更新完成，即将重启…', devReady: false, error: '' }
       }
     }
     Events.On('guji:update:started', onUpdStarted)
     Events.On('guji:update:finished', onUpdFinished)
     // wails updater 内部事件作为补充（若在 WindowNone 下可达，可提供更细粒度阶段）
     Events.On('wails:updater:download-started', onUpdStarted)
+    Events.On('wails:updater:download-progress', (e: any) => {
+      const d = e?.data || {}
+      const written = Number(d.written || 0)
+      const total = Number(d.total || 0)
+      const rate = Number(d.rate || 0)
+      const percent = total > 0 ? Math.min(100, Math.max(0, Math.round((written / total) * 100))) : 0
+      updateProgress.value = {
+        ...updateProgress.value,
+        active: true,
+        stage: '正在下载更新…',
+        written, total, rate, percent,
+      }
+    })
+    Events.On('wails:updater:download-complete', () => {
+      // 下载完成但尚未进入校验：保持进度为 100%，等待 verifying 事件接管文案
+      updateProgress.value = { ...updateProgress.value, active: true, percent: 100, stage: '正在下载更新…' }
+    })
     Events.On('wails:updater:verifying', () => { if (updateProgress.value.active) updateProgress.value = { ...updateProgress.value, stage: '正在校验更新包…' } })
     Events.On('wails:updater:installing', () => { if (updateProgress.value.active) updateProgress.value = { ...updateProgress.value, stage: '正在安装更新…' } })
     Events.On('wails:updater:update-ready', () => { if (updateProgress.value.active) updateProgress.value = { ...updateProgress.value, stage: '即将完成，准备重启…' } })
     Events.On('wails:updater:error', (e: any) => {
       const msg = e?.data?.message || (typeof e?.data === 'string' ? e.data : '')
-      updateProgress.value = { active: false, stage: '更新失败', devReady: false, error: String(msg || '未知错误') }
+      updateProgress.value = { ...updateProgress.value, active: false, stage: '更新失败', devReady: false, error: String(msg || '未知错误') }
       toast('更新失败：' + (msg || '未知错误'))
     })
     // 启动后由 Go 端延迟做后台自动检查（Go 端再延 3s，确保本监听已就位）
