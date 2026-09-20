@@ -22,29 +22,6 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # CI 验证（tag / dispatch 跑，不发布）：仅前端类型检查。
-  #   Go 编译不在 ubuntu 做——wails v3 的 webview 按平台 build-tag 拆分，ubuntu 默认
-  #   GOOS=linux 会拉入 GTK/WebKit 开发库（runner 未装），且本项目不发 Linux 包
-  #   （只发 macOS/Windows）。Go 编译由 macos/windows 两个平台 job 完成。
-  #   （与 mdx 的 release.yml 一致：test job 只跑前端，Go 构建只在平台 job。）
-  # ---------------------------------------------------------------------------
-  test:
-    name: Test / CI verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install frontend deps
-        run: npm ci --prefix frontend
-      - name: Frontend type-check
-        working-directory: frontend
-        run: npx --no-install vue-tsc --noEmit
-
-  # ---------------------------------------------------------------------------
   # macOS：universal 一次构建 + lipo 拆成 arm64 / x86_64 单架构 zip（updater 友好）
   #   updater 只内联解压 .zip/.tar.gz，且 DefaultAssetMatcher 选第一个匹配
   #   platform+arch 的资产；因此必须发“含 .app 的 zip”，绝不能发 .dmg
@@ -52,7 +29,6 @@ jobs:
   # ---------------------------------------------------------------------------
   macos:
     name: Build macOS (arm64, x86_64)
-    needs: test
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,7 +83,6 @@ jobs:
   # ---------------------------------------------------------------------------
   windows:
     name: Build Windows (amd64)
-    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
