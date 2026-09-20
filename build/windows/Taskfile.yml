@@ -17,7 +17,7 @@ vars:
   # 更新器基线版本：唯一来源 = build/config.yml 的 info.version（与前端 __APP_VERSION__ 同源）。
   # 构建期通过 -ldflags 注入 internal/services.appVersion，发版只需改 config.yml 一处。
   APP_VERSION:
-    sh: awk '/^info:/{f=1} f&&/version:/{print; exit}' "{{.ROOT_DIR}}/build/config.yml" | sed -E 's/.*"([0-9.]+)".*/\1/'
+    sh: awk '/^info:/{f=1} f&&/version:/{if(match($0,/[0-9]+\.[0-9]+\.[0-9]+/)) print substr($0,RSTART,RLENGTH); exit}' '{{.ROOT_DIR}}/build/config.yml'
 
 tasks:
   build:
