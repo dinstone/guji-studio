@@ -54,15 +54,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP=build/bin/GujiStudio.app
+          # 产物名由 APP_NAME（gujistudio）决定，且 .app 位置依赖 go-task 工作目录；
+          # 用 find 动态定位，避免硬编码路径/大小写出错（曾误写成 build/bin/GujiStudio.app）。
+          APP=$(find . -maxdepth 5 -name "gujistudio.app" -not -path "*/node_modules/*" 2>/dev/null | head -n1)
+          if [ -z "$APP" ]; then echo "::error::gujistudio.app not found"; exit 1; fi
+          BIN="$APP/Contents/MacOS/gujistudio"
           mkdir -p dist-release
           # lipo 的 Intel 切片名为 x86_64；命名 GujiStudio-darwin-x86_64.zip
           # （含 x86_64，updater DefaultAssetMatcher 把它当作 amd64 别名，自动匹配）
           for SLICE in arm64 x86_64; do
             cp -R "$APP" "GujiStudio-${SLICE}.app"
-            lipo -extract "$SLICE" "$APP/Contents/MacOS/GujiStudio" \
-              -output "GujiStudio-${SLICE}.app/Contents/MacOS/GujiStudio"
-            strip -x "GujiStudio-${SLICE}.app/Contents/MacOS/GujiStudio"
+            lipo -extract "$SLICE" "$BIN" \
+              -output "GujiStudio-${SLICE}.app/Contents/MacOS/gujistudio"
+            strip -x "GujiStudio-${SLICE}.app/Contents/MacOS/gujistudio"
             # 替换二进制后 ad-hoc 签名必须更新，否则用户打开报“已损坏”
             codesign --force --deep --sign - "GujiStudio-${SLICE}.app"
             # 顶层即 GujiStudio.app，updater 解压后 rename 到位
@@ -100,7 +104,11 @@ jobs:
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
         shell: bash
       - name: Install NSIS
-        run: choco install nsis -y
+        shell: bash
+        run: |
+          choco install nsis -y
+          # makensis 不在默认 PATH 上；把 NSIS 安装目录加入 GITHUB_PATH 供后续步骤使用
+          echo "C:/Program Files (x86)/NSIS" >> "$GITHUB_PATH"
       - name: Install frontend deps
         run: npm ci --prefix frontend
       - name: Build & package installer
@@ -113,12 +121,18 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist-release | Out-Null
-          $exe = Get-ChildItem -Path "build/bin" -Filter "GujiStudio.exe" | Select-Object -First 1
-          if (-not $exe) { Write-Error "GujiStudio.exe not found"; exit 1 }
+          # 产物名由 APP_NAME（gujistudio）决定；在 bin/build 下动态定位，
+          # 避免硬编码 build/bin/GujiStudio.exe（路径与大小写都不对）。
+          $exe = Get-ChildItem -Path "bin","build" -Filter "gujistudio.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            $exe = Get-ChildItem -Path "." -Filter "gujistudio.exe" -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -notlike "*\node_modules\*" } | Select-Object -First 1
+          }
+          if (-not $exe) { Write-Error "gujistudio.exe not found"; exit 1 }
           Compress-Archive -Path $exe.FullName -DestinationPath "dist-release/GujiStudio-windows-amd64.zip" -Force
           # NSIS 安装包默认命名含 -installer.；保留该后缀以便 updater 的
           # DefaultAssetMatcher 跳过它、改用上面的 zip 做自动更新。
-          $installer = Get-ChildItem -Path "build" -Recurse -Filter "*installer.exe" | Select-Object -First 1
+          $installer = Get-ChildItem -Path "build" -Filter "*installer.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($installer) {
             Copy-Item $installer.FullName "dist-release/$($installer.Name)"
           } else {
@@ -149,7 +163,8 @@ jobs:
         run: |
           set -euo pipefail
           TAG=${GITHUB_REF_NAME#v}   # 去掉前缀 v：v0.8.7 -> 0.8.7
-          CFG=$(awk '/^info:/{f=1} f&&/version:/{print; exit}' build/config.yml | sed -E 's/.*"([0-9.]+)".*/\1/')
+          # 纯 awk 抽 semver，避免 sed -E 在 Windows runner 上分组+反向引用报错
+          CFG=$(awk '/^info:/{f=1} f&&/version:/{if(match($0,/[0-9]+\.[0-9]+\.[0-9]+/)) print substr($0,RSTART,RLENGTH); exit}' build/config.yml)
           echo "tag version      = $TAG"
           echo "config.yml version = $CFG"
           if [ -z "$CFG" ] || [ "$CFG" != "$TAG" ]; then
