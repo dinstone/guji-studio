@@ -48,7 +48,6 @@ tasks:
             ref: .OBFUSCATED
           DEV:
             ref: .DEV
-      - task: common:generate:icons
       - task: common:update:build-assets
     preconditions:
       - sh: '{{if eq .OBFUSCATED "true"}}command -v garble >/dev/null 2>&1{{else}}true{{end}}'
@@ -77,7 +76,6 @@ tasks:
         vars:
           OBFUSCATED:
             ref: .OBFUSCATED
-      - task: common:generate:icons
     preconditions:
       - sh: docker info > /dev/null 2>&1
         msg: "Docker is required for CGO cross-compilation. Please install Docker."
