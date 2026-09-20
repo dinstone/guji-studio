@@ -43,26 +43,49 @@ func main() {
 		},
 	})
 
+	// --- 统一日志：把全局 log 同时打到 stderr 与应用日志文件 ---
+	// 让 update.go 等已有 log.Printf 自动落盘；前端错误回传后也写同一文件。
+	services.InitLogger()
+
+	// 监听前端（webview）未捕获错误 / console.error|warn，转发进统一日志。
+	app.Event.On("frontend:error", func(e *application.CustomEvent) {
+		log.Printf("[frontend] %v", e.Data)
+	})
+
 	// --- 应用内更新器（Wails3 pkg/updater，GitHub Releases 作为更新源）---
 	// 更新源：GitHub Releases（内置 github provider），仓库见 services.updateRepo。
-	// Release 资产文件名需包含 windows/darwin/linux + amd64/arm64 以匹配平台，
-	// 可选附带 SHA256SUMS 校验和侧车做完整性校验。
+	// Release 资产文件名需包含 windows/darwin/linux + amd64/arm64 以匹配平台。
+	// 更新 UI 完全由前端 Vue 弹窗（UpdateDialog / 关于页行内）驱动，wails 内置的
+	// 原生更新窗口一律禁用（WindowNone）：wails 在 builtin 模式下会 openSession 另开一个独立
+	// webview 原生窗口跑更新 UI，该窗口 Open/Close 与原生 webview cgo 调用在 goroutine 上同主窗口
+	// webview 竞态会 SIGSEGV（已查实 pkg/updater/window.go 的 openSession → host.OpenWindow）。
+	// 禁掉后 updater 只做下载/校验/替换，UI 由我们自己的弹窗承担，从根上消除崩溃。
+	// 不配置 ChecksumAsset：Check 阶段只取"版本/说明/下载链接"以尽快弹出更新提示，
+	// 避免在检查阶段就去拉校验和侧车（本仓库未生成 SHA256SUMS，且部分地区访问 GitHub 下载慢易超时）。
 	ghProvider, ghErr := github.New(github.Config{
-		Repository:    services.UpdateRepo(),
-		HTTPClient:    services.UpdaterHTTPClient(),
-		ChecksumAsset: "SHA256SUMS",
+		Repository: services.UpdateRepo(),
+		HTTPClient: services.UpdaterHTTPClient(),
 	})
 	if ghErr != nil {
 		log.Fatalf("updater: github.New: %v", ghErr)
 	}
+	// 把运行中的应用实例注入 UpdateService（与 updater 是否初始化无关，先注入备用）。
+	services.SetApp(app)
+
+	curVer := services.AppVersion()
+	if curVer == "" {
+		// 开发构建（wails3 task run）未通过 -ldflags 注入版本，直接用 0.0.0 兜底：
+		// 0.0.0 低于线上任何 release，updater.Init 可正常通过，且开发模式下能实测更新流程（必触发「发现新版本」）。
+		curVer = "0.0.0"
+	}
 	if err := app.Updater.Init(updater.Config{
-		CurrentVersion: services.AppVersion(),
+		CurrentVersion: curVer,
 		Providers:      []updater.Provider{ghProvider},
+		Window:         updater.WindowNone,
 	}); err != nil {
 		log.Fatalf("updater: Init: %v", err)
 	}
-	// 把运行中的应用与 Updater 注入 UpdateService，驱动启动后后台检查并向前端推送可用性。
-	services.SetApp(app)
+	// 把运行中的 Updater 注入 UpdateService，驱动启动后后台检查并向前端推送可用性。
 	services.SetUpdater(app.Updater)
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{

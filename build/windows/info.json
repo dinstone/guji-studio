@@ -1,13 +1,13 @@
 {
 	"fixed": {
-		"file_version": "0.8.7"
+		"file_version": "0.8.9"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.8.7",
+			"ProductVersion": "0.8.9",
 			"CompanyName": "dinstone ltd",
 			"FileDescription": "古籍工作室，可视化排版，所见即所得。",
-			"LegalCopyright": "(c) 2026, dinstone",
+			"LegalCopyright": "(c) 2026, dinstone@163.com",
 			"ProductName": "Guji Studio",
 			"Comments": "Guji Studio"
 		}

@@ -817,7 +817,21 @@ export function closeAbout() { aboutOpen.value = false }
 /** 更新对话框（含赞赏码）：自动检查发现新版 / 关于页手动检查均可触发 */
 export const updateOpen = ref(false)
 export const updateResult = ref<CheckUpdateResult | null>(null)
-export function openUpdate(r: CheckUpdateResult) { updateResult.value = r; updateOpen.value = true }
+export function openUpdate(r: CheckUpdateResult) { updateResult.value = r; updateOpen.value = true; downloadVer.value = r.version }
+
+// 更新进行中状态：由 wails updater headless 进度事件驱动，状态栏常驻显示「更新中」。
+// WindowNone 模式下 wails 不弹原生更新窗口，进度只能靠这些事件回传前端。
+export const updateProgress = ref<{ active: boolean; stage: string; devReady: boolean; error: string }>({
+  active: false, stage: '', devReady: false, error: '',
+})
+
+// 应用下载窗口：点「立即更新」后统一展示下载 / 安装进度。
+// 自动弹窗（启动发现新版）与关于页（手动检查）两条路径共用，确保反馈一致、
+// 不再只是状态栏一行小字 + 一条日志（用户反馈“点了就啥都没有了”）。
+export const downloadOpen = ref(false)
+export const downloadVer = ref('')
+export function closeDownload() { downloadOpen.value = false }
+
 export function closeUpdate() { updateOpen.value = false }
 
 /** 立即落盘当前项目（切换/退出前调用）。返回是否保存成功。 */
@@ -1219,6 +1233,39 @@ export async function watchExternalOpen() {
         const r = await getLastUpdate()
         if (r?.hasUpdate) openUpdate(r)
       } catch { /* 忽略 */ }
+    })
+    // 更新进度：优先使用自己应用层事件（guji:update:*），不依赖 wails updater 内部
+    // 事件名在前端是否可达；同时保留 wails 内部事件作为补充/兜底。
+    const onUpdStarted = () => {
+      // 点「立即更新」后统一弹出应用下载窗口（自动弹窗 / 关于页共用）。
+      updateProgress.value = { active: true, stage: '正在下载更新…', devReady: false, error: '' }
+      if (updateResult.value?.version) downloadVer.value = updateResult.value.version
+      downloadOpen.value = true
+    }
+    const onUpdFinished = (e: any) => {
+      const data = e?.data || {}
+      if (data.error) {
+        // 终态：active 复位，避免「检查更新」按钮被全局进度态永久禁用（下载窗口仍开，显示失败原因）
+        updateProgress.value = { active: false, stage: '更新失败', devReady: false, error: String(data.error || '') }
+        toast('更新失败：' + (data.error || ''))
+      } else if (data.devReady) {
+        // 开发模式不自动重启：提示手动重启；进度结束 active 复位，关于页「检查更新」可再次点击
+        updateProgress.value = { active: false, stage: '已下载完成，请手动重启应用', devReady: true, error: '' }
+      } else {
+        updateProgress.value = { active: true, stage: '更新完成，即将重启…', devReady: false, error: '' }
+      }
+    }
+    Events.On('guji:update:started', onUpdStarted)
+    Events.On('guji:update:finished', onUpdFinished)
+    // wails updater 内部事件作为补充（若在 WindowNone 下可达，可提供更细粒度阶段）
+    Events.On('wails:updater:download-started', onUpdStarted)
+    Events.On('wails:updater:verifying', () => { if (updateProgress.value.active) updateProgress.value = { ...updateProgress.value, stage: '正在校验更新包…' } })
+    Events.On('wails:updater:installing', () => { if (updateProgress.value.active) updateProgress.value = { ...updateProgress.value, stage: '正在安装更新…' } })
+    Events.On('wails:updater:update-ready', () => { if (updateProgress.value.active) updateProgress.value = { ...updateProgress.value, stage: '即将完成，准备重启…' } })
+    Events.On('wails:updater:error', (e: any) => {
+      const msg = e?.data?.message || (typeof e?.data === 'string' ? e.data : '')
+      updateProgress.value = { active: false, stage: '更新失败', devReady: false, error: String(msg || '未知错误') }
+      toast('更新失败：' + (msg || '未知错误'))
     })
     // 启动后由 Go 端延迟做后台自动检查（Go 端再延 3s，确保本监听已就位）
     startAutoCheck().catch(() => {})

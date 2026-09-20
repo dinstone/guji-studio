@@ -6,11 +6,11 @@
 name: "gujistudio"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.8.0"
+version: "0.8.9"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-description: "古籍工作室，一切可视化排版"
+description: "古籍工作室，可视化排版，所见即所得。"
 vendor: "dinstone ltd"
 homepage: "https://wails.io"
 license: "MIT"

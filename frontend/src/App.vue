@@ -13,8 +13,9 @@ import DialogHost from './components/DialogHost.vue'
 import ProjectInfoDialog from './components/ProjectInfoDialog.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
+import UpdateProgressDialog from './components/UpdateProgressDialog.vue'
 import ProjectSwitcher from './components/ProjectSwitcher.vue'
-import { view, toastMsg, boot, projectLoaded, booting, welcomeOpen, editorWidth, projectInfoOpen, closeProjectInfo, aboutOpen, updateOpen } from './stores/app'
+import { view, toastMsg, boot, projectLoaded, booting, welcomeOpen, editorWidth, projectInfoOpen, closeProjectInfo, aboutOpen, updateOpen, downloadOpen } from './stores/app'
 
 /* macOS 左上角有红黄绿「交通灯」窗口控制按钮（约占据窗口左起 0~70px），
  * dragbar 上的左侧控件需留出左内边距规避其遮蔽；Windows 控制按钮在右上，无需左侧留白。 */
@@ -103,6 +104,7 @@ function startResize(e: MouseEvent) {
   <ProjectInfoDialog v-if="projectInfoOpen" />
   <AboutDialog v-if="aboutOpen" />
   <UpdateDialog v-if="updateOpen" />
+  <UpdateProgressDialog v-if="downloadOpen" />
   <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
   <DialogHost />
 </template>

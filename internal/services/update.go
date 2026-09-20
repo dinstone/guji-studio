@@ -41,6 +41,11 @@ func SetUpdater(u *updater.Updater) { updaterRef = u }
 // AppVersion 返回当前构建版本（供 main.go 喂给 updater 作基线）。
 func AppVersion() string { return appVersion }
 
+// IsDevBuild 报告当前是否为开发构建（未通过 -ldflags 注入 appVersion）。
+// 开发模式下点「立即更新」不应自动重启：wails dev watcher 不会接管被 helper 重启的
+// dev 二进制，静默退出会让用户误以为崩溃；改为发 guji:update:dev-ready 事件提示手动重启。
+func IsDevBuild() bool { return appVersion == "" }
+
 // UpdateRepo 返回更新源仓库（供 main.go 构造 github provider）。
 func UpdateRepo() string { return updateRepo }
 
@@ -161,12 +166,58 @@ func (s *UpdateService) GetLastUpdate() *CheckUpdateResult {
 	return getCachedResult()
 }
 
-// InstallUpdate 执行完整「检查 + 下载 + 安装」。供更新弹窗的「立即更新」按钮调用。
+// InstallUpdate 下载并安装当前已发现的新版本，完成后由 wails 自动重启应用。
+// 供更新弹窗 / 关于页「立即更新」按钮调用。
+//
+// 与早先实现不同，这里**不再**调用 CheckAndInstall：CheckAndInstall 在 builtin 模式下
+// 会 openSession 另开一个独立原生 webview 更新窗口（见 wails pkg/updater/window.go 的
+// openSession → host.OpenWindow），该窗口的 Open/Close 与原生 webview 的 cgo 调用在 goroutine
+// 上和主窗口 webview 竞态，会 SIGSEGV（signal arrived during cgo execution, addr=0x18）。
+// 由于 main.go 已将 Config.Window 设为 updater.WindowNone，wails 不再开自己的窗口；
+// 这里直接 DownloadAndInstall（下载+校验+暂存，不碰 window）+ Restart（spawn helper 并 Quit，
+// 由 helper 完成二进制替换并重启）即可。UI 完全由前端 Vue 弹窗承担。
+//
+// 必须在独立 goroutine 中执行：DownloadAndInstall/Restart 是长时间操作，且 Restart 会调用
+// host.Quit() 触发应用退出；若在 webview 的 JS→Go cgo 调用栈（goroutine 1, locked to thread）
+// 上同步执行会阻塞/竞态。改为 goroutine 后 InstallUpdate 立即返回，前端 await 立刻 resolve，
+// 下载/重启在普通 goroutine 栈进行。失败仅记日志。
 func (s *UpdateService) InstallUpdate() error {
 	if updaterRef == nil {
 		return fmt.Errorf("updater not initialised")
 	}
-	return updaterRef.CheckAndInstall(context.Background())
+	go func() {
+		// 立刻通知前端「更新已开始」，让状态栏/按钮有反馈。
+		if appRef != nil {
+			appRef.Event.Emit("guji:update:started", nil)
+		}
+		ctx := context.Background()
+		// pending release 由此前 Check（后台自动检查或关于页手动检查）写入；
+		// 直接下载并安装。
+		if err := updaterRef.DownloadAndInstall(ctx); err != nil {
+			log.Printf("[updater] download/install failed: %v", err)
+			if appRef != nil {
+				appRef.Event.Emit("guji:update:finished", map[string]any{"error": err.Error()})
+			}
+			return
+		}
+		if IsDevBuild() {
+			// 开发模式不自动重启：dev 二进制会被替换成下载的 release 二进制，而 wails dev
+			// watcher 不会接管被 helper 重启的进程，静默退出会让用户误以为崩溃。
+			// 发事件提示手动重启（前端状态栏显示「已下载，请手动重启」）。
+			log.Printf("[updater] dev build: update downloaded, skip auto-restart (restart manually)")
+			if appRef != nil {
+				appRef.Event.Emit("guji:update:finished", map[string]any{"devReady": true})
+			}
+			return
+		}
+		if err := updaterRef.Restart(ctx); err != nil {
+			log.Printf("[updater] restart failed: %v", err)
+			if appRef != nil {
+				appRef.Event.Emit("guji:update:finished", map[string]any{"error": err.Error()})
+			}
+		}
+	}()
+	return nil
 }
 
 // CheckUpdate 执行一次即时更新检查并直接返回结果（不推送事件）。

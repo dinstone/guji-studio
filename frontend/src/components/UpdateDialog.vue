@@ -9,11 +9,12 @@ const installing = ref(false)
 
 async function doUpdate() {
   installing.value = true
+  // 点击下载后立即关闭提示框：更新在后台进行，下载完成后 wails 自动重启应用
+  closeUpdate()
   try {
     // CheckAndInstall 下载安装后会自动重启应用，通常不再返回
     await installUpdate()
   } catch (e: any) {
-    installing.value = false
     toast('更新失败：' + (e?.message || e))
   }
 }

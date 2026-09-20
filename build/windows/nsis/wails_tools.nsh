@@ -14,10 +14,10 @@
     !define INFO_PRODUCTNAME "Guji Studio"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "0.8.0"
+    !define INFO_PRODUCTVERSION "0.8.9"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "(c) 2026, dinstone"
+    !define INFO_COPYRIGHT "(c) 2026, dinstone@163.com"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"

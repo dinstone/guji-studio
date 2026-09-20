@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { closeAbout, openUpdate, toast } from '../stores/app'
+import { closeAbout, toast, downloadVer, updateProgress } from '../stores/app'
 import { fetchSponsors, type Sponsor, type SponsorsData } from '../core/sponsors'
 import { openExternal } from '../platform/wails'
-import { checkUpdate } from '../platform/update'
+import { checkUpdate, installUpdate, type CheckUpdateResult } from '../platform/update'
 
 function openHomepage() {
   openExternal(proj.value.homepage || HOMEPAGE)
@@ -14,19 +14,34 @@ const HOMEPAGE = 'https://github.com/dinstone/guji-studio'
 
 const version = __APP_VERSION__
 const checking = ref(false)
+// 手动检查结果状态：idle 未检查 / latest 已是最新 / available 发现新版本 / error 检查失败
+const updateStatus = ref<'idle' | 'latest' | 'available' | 'error'>('idle')
+const updateInfo = ref<CheckUpdateResult | null>(null)
 
-// 关于页「检查更新」按钮：即时检查；有新版本则打开更新弹窗，否则提示已是最新
+// 关于页「检查更新」按钮：即时检查，结果行内展示（不弹独立弹窗）。
+// 发现新版本 → 行内显示版本号 + 「立即更新」按钮；否则显示「已是最新版本」。
 async function checkForUpdate() {
-  if (checking.value) return
+  if (checking.value || updateProgress.value.active) return
   checking.value = true
+  updateStatus.value = 'idle'
   try {
     const r = await checkUpdate()
     if (!r) return
-    if (r.error) { toast('更新检查失败：' + r.error); return }
-    if (r.hasUpdate) openUpdate(r)
-    else toast('已是最新版本 v' + version)
+    if (r.error) { updateStatus.value = 'error'; toast('更新检查失败：' + r.error); return }
+    if (r.hasUpdate) { updateStatus.value = 'available'; updateInfo.value = r; downloadVer.value = r.version }
+    else updateStatus.value = 'latest'
   } finally {
     checking.value = false
+  }
+}
+
+// 关于页行内「立即更新」：后台下载安装，完成后 wails 自动重启。
+async function doInlineUpdate() {
+  if (!updateInfo.value || updateProgress.value.active) return
+  try {
+    await installUpdate()
+  } catch (e: any) {
+    toast('更新失败：' + (e?.message || e))
   }
 }
 
@@ -81,8 +96,21 @@ const sorted = computed<Sponsor[]>(() =>
             <li class="ab-ver-row">
               <span>当前版本</span>
               <div class="ab-ver-cell">
-                <b>v{{ version }}</b>
-                <button class="ab-btn ghost" @click="checkForUpdate" :disabled="checking">{{ checking ? '检查中…' : '检查更新' }}</button>
+                <div class="ab-ver-base">
+                  <b>v{{ version }}</b>
+                  <button class="ab-btn ghost" @click="checkForUpdate" :disabled="checking || updateProgress.active || updateStatus === 'available'">{{ checking ? '检查中…' : '检查更新' }}</button>
+                </div>
+                <template v-if="updateStatus === 'available'">
+                  <span class="ab-ver-arrow">→</span>
+                  <div class="ab-ver-action">
+                    <b class="ab-ver-new">v{{ updateInfo?.version }}</b>
+                    <button v-if="!updateProgress.active" class="ab-btn primary" @click="doInlineUpdate">立即更新</button>
+                    <span v-else class="ab-latest">{{ updateProgress.stage || '更新下载中…' }}</span>
+                  </div>
+                </template>
+                <span v-else-if="updateStatus === 'latest' || updateStatus === 'error'" class="ab-latest">
+                  {{ updateStatus === 'latest' ? '已是最新版本' : '更新检查失败，请稍后重试' }}
+                </span>
               </div>
             </li>
             <li><span>项目主页</span><a href="#" @click.prevent="openHomepage">{{ proj.homepage || HOMEPAGE }}</a></li>
@@ -149,7 +177,8 @@ const sorted = computed<Sponsor[]>(() =>
 .ab-lead { font-size: 13px; line-height: 1.7; color: #4a4843; margin: 0 0 14px; }
 .ab-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
 .ab-list li { display: flex; gap: 10px; font-size: 13px; color: #4a4843; }
-.ab-list li span { width: 72px; color: #9a978c; flex: none; }
+/* 仅匹配「标签列」直接子 span，避免污染版本行里嵌套的箭头 span（否则箭头会被 72px 撑宽） */
+.ab-list li > span { width: 72px; color: #9a978c; flex: none; }
 .ab-list a { color: #0f6e56; word-break: break-all; }
 .ab-note { font-size: 11px; color: #a7a399; margin: 7px 0; line-height: 1.6; }
 
@@ -177,7 +206,18 @@ const sorted = computed<Sponsor[]>(() =>
 .ab-btn:hover { border-color: #0f6e56; color: #0f6e56; }
 .ab-btn:disabled { opacity: 0.5; cursor: default; }
 .ab-ver-row { display: flex; gap: 10px; align-items: center; }
-.ab-ver-cell { display: flex; align-items: center; gap: 10px; flex: 1; }
+.ab-ver-cell { display: flex; align-items: center; gap: 12px; flex: 1; }
 .ab-ver-cell b { color: #2c2c2a; }
-.ab-btn.ghost { padding: 5px 12px; font-size: 12px; background: #f3f1ea; }
+/* 单元一：当前版本 + 检查更新按钮（内部紧排） */
+.ab-ver-base { display: flex; align-items: center; gap: 6px; }
+/* 单元二：箭头 + 新版本 + 立即更新按钮（内部紧排） */
+.ab-ver-action { display: flex; align-items: center; gap: 4px; }
+/* 版本行按钮紧凑化；两个按钮都是 4 个等宽汉字，天然等宽，无需定宽 */
+.ab-ver-cell .ab-btn { padding: 5px 10px; font-size: 12px; }
+.ab-btn.ghost { background: #f3f1ea; }
+.ab-btn.primary { background: #0f6e56; color: #fff; border-color: #0f6e56; }
+.ab-btn.primary:hover:not(:disabled) { background: #0c5a46; color: #fff; }
+.ab-latest { font-size: 13px; color: #0f6e56; }
+.ab-ver-arrow { color: #9a978c; font-size: 12px; width: 16px; text-align: center; flex: none; }
+.ab-ver-new { color: #0f6e56; }
 </style>
