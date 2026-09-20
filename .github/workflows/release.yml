@@ -37,7 +37,8 @@ jobs:
       - name: Install frontend deps
         run: npm ci --prefix frontend
       - name: Frontend type-check
-        run: npm --prefix frontend exec vue-tsc --noEmit
+        working-directory: frontend
+        run: npx --no-install vue-tsc --noEmit
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
