@@ -22,7 +22,11 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # CI 验证（tag / master 推送都跑，不发布）：前端类型检查 + Go 内部包编译
+  # CI 验证（tag / dispatch 跑，不发布）：仅前端类型检查。
+  #   Go 编译不在 ubuntu 做——wails v3 的 webview 按平台 build-tag 拆分，ubuntu 默认
+  #   GOOS=linux 会拉入 GTK/WebKit 开发库（runner 未装），且本项目不发 Linux 包
+  #   （只发 macOS/Windows）。Go 编译由 macos/windows 两个平台 job 完成。
+  #   （与 mdx 的 release.yml 一致：test job 只跑前端，Go 构建只在平台 job。）
   # ---------------------------------------------------------------------------
   test:
     name: Test / CI verify
@@ -39,12 +43,6 @@ jobs:
       - name: Frontend type-check
         working-directory: frontend
         run: npx --no-install vue-tsc --noEmit
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - name: Go build (internal packages)
-        run: go build ./internal/...
 
   # ---------------------------------------------------------------------------
   # macOS：universal 一次构建 + lipo 拆成 arm64 / x86_64 单架构 zip（updater 友好）
