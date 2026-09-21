@@ -904,15 +904,19 @@
              若省不下格（如 commentCellNorm:cellH = 1:2 时 11 格与 12 格同占 6 位）就是纯损失——
              该闭号落在行末、本不受避头点约束，正常占格即可（用户 2026-09-17 反馈）。 */
           var effR = cEffLen(vis, 0, per), effL = cEffLen(vis, per, vis.length), cand = null;
-          if (effR - effL === 1 && per > 0 && typeof vis[per - 1] === 'string' &&
+          /* 挤挂候选：**长行**行尾是标点（闭号或悬空点）即可 —— 不再要求两行差恰为 1（与跨列分支同口径）。 */
+          if (effR > effL && per > 0 && typeof vis[per - 1] === 'string' &&
               (cnopSetP[vis[per - 1]] || CLOSE_PUNCT.indexOf(vis[per - 1]) >= 0)) cand = 'R';
-          else if (effL - effR === 1 && typeof vis[vis.length - 1] === 'string' &&
+          else if (effL > effR && typeof vis[vis.length - 1] === 'string' &&
               (cnopSetP[vis[vis.length - 1]] || CLOSE_PUNCT.indexOf(vis[vis.length - 1]) >= 0)) cand = 'L';
           var effMax0 = Math.max(effR, effL),
               effMaxS = Math.max(effR - (cand === 'R' ? 1 : 0), effL - (cand === 'L' ? 1 : 0)),
               spNo = Math.max(1, Math.ceil(effMax0 * m.commentCellNorm / m.cellH - 0.08)),
               spYes = Math.max(1, Math.ceil(effMaxS * m.commentCellNorm / m.cellH - 0.08)),
-              sqz = (cand && spYes < spNo) ? cand : null,
+              /* 执行条件：① 能省一个正文字位（原规则，避免「挤挂无收益」——用户 2026-09-17）；
+                 或 ② 两行明显不齐（|effR−effL| ≥ 2，避头把切点标点推成整格所致）——
+                 压缩让长行少占 1 格，底空少一行（用户 2026-09-21 口径）。 */
+              sqz = (cand && (spYes < spNo || Math.abs(effR - effL) >= 2)) ? cand : null,
               effMax = sqz ? effMaxS : effMax0;
           /* 栅格锁（元宝 / W3C 中文排版草案模型）：夹注整体必须占「整数字位」的正文格，
              双行夹注 = 1 个正文字位、四行 = 2 个……列尾才能齐。
@@ -933,7 +937,11 @@
             var fitChars = Math.max(2, 2 * Math.floor(availRows * m.cellH / m.commentCellNorm));
             var k = Math.min(vis.length, fitChars);
             if (k < vis.length && k % 2) k--;
-            var rawTake = vmap[Math.min(k, vmap.length) - 1] + 1;
+            /* 折点方案闭包：给定「取 kk 个可视单元」+「尾串标点是否压缩(useHang)」→ rawTake（避头吞尾）/
+               segN/均衡 segPer/挤挂 sqz/两行压缩后有效格数 effR·effL → 返回**未经 availRows 钳制**的
+               原始 spanRaw。外层在 (k,k+1) × (不压缩,压缩) 四个候选里择优（见下）。 */
+            var planSeg = function (kk, useHang) {
+            var rawTake = vmap[Math.min(kk, vmap.length) - 1] + 1;
             if (cHangP) { while (rawTake < chars.length && cnopSetP[chars[rawTake]]) rawTake++; }  // 折列点后紧跟的悬空 nop 随前字（rot 已占计数不吞）
             var rawTakePre = rawTake;                              // 折点原名落点（记下来算「闭号尾串」）
             while (rawTake < chars.length && typeof chars[rawTake] === 'string' &&
@@ -945,10 +953,13 @@
                  ② 闭号将落在**折列后新段头** → 即此处：拉回前段并压缩，不占格。
                本段 span 保持原值（折列段恒贴列底，栅格锁下最少 1 格）——省下的那一格转为
                块内均分余量（首末字仍钉死格网、列尾齐平不受影响），不增列不增页。 */
-            var hangN = 0;
-            for (var hqn = rawTake - 1; hqn >= rawTakePre; hqn--) {
-              if (typeof chars[hqn] === 'string' && CLOSE_PUNCT.indexOf(chars[hqn]) >= 0) hangN++; else break;
-            }
+            /* 避头拉回的尾串标点（闭号 **与悬空点（：、；）**）**可**压缩——仍归本段（绝不留给下列首），
+               但**不占格**：渲染端挂在段末字之后、沉入段底留白带。用户口径（2026-09-21）：
+               「：」本来就是**避头标点**，拉回上一块后按「标点压缩」不占格，不该因它是 nop 就区别对待
+               （旧版只认 CLOSE_PUNCT 且遇 nop 即 break → 「：」占整格 → span 多算 → 左子列底空 2 行）。
+               但压缩会让**左行变短**，只有当它让两行更齐平（|effR−effL| 变小）时才划算 ——
+               故由外层择优（useHang），不无条件压缩。rawTake − rawTakePre 即避头吞入的标点个数。 */
+            var hangN = useHang ? (rawTake - rawTakePre) : 0;
             var seg = chars.slice(0, rawTake);
             /* 段内实际可见单元数：rawTake 吞尾标点（避头）后可能 > k——渲染端 fold 按全 chars 计数，
                此处必须同口径，否则多出的标点落到左行尾、maxEff 超 span 预算 → 底对齐整块上移 */
@@ -971,20 +982,67 @@
               segPer++;
             }
             var segEffR = cEffLen(segVis, 0, segPer), segEffL = cEffLen(segVis, segPer, segN), segCand = null;
-            if (segEffR - segEffL === 1 && segPer > 0 && typeof segVis[segPer - 1] === 'string' &&
+            /* 【2026-09-21】吞尾闭号（hangN 个）由渲染端压缩沉入段底、**不占格**；但分页端 cEffLen
+               在 full 模式仍按 eff=1 计入 → span 被多算 → 整块被外层钳短（列6 类底空）。此处扣除之，
+               随后 sqz 候选判断才正确（与渲染端「hang 弹字不占位」同口径）。 */
+            if (hangN > 0) {
+              var hEff = 0, hCnt = 0;
+              for (var hb = segN - 1; hb >= 0 && hCnt < hangN; hb--) {
+                var hbc = segVis[hb];
+                /* 同 hangN 口径：闭号 **与 nop** 都压缩不占格（旧版只认闭号，遇 nop 即停 → 扣不掉） */
+                if (typeof hbc !== 'string' || (CLOSE_PUNCT.indexOf(hbc) < 0 && !cnopSetP[hbc])) break;
+                hEff += cEffLen(segVis, hb, hb + 1); hCnt++;
+              }
+              if (segPer < segN) segEffL = Math.max(0, segEffL - hEff);
+              else               segEffR = Math.max(0, segEffR - hEff);
+            }
+            /* 挤挂候选：**长行**行尾是标点（闭号或悬空点）即可 —— 不再要求两行差恰为 1。
+               压缩令长行少占 1 格 → |effR−effL| 直接 −1，即「短子列底空行数」−1。 */
+            if (segEffR > segEffL && segPer > 0 && typeof segVis[segPer - 1] === 'string' &&
                 (cnopSetP[segVis[segPer - 1]] || CLOSE_PUNCT.indexOf(segVis[segPer - 1]) >= 0)) segCand = 'R';
-            else if (segEffL - segEffR === 1 && typeof segVis[segVis.length - 1] === 'string' &&
+            else if (segEffL > segEffR && !hangN && typeof segVis[segVis.length - 1] === 'string' &&
                 (cnopSetP[segVis[segVis.length - 1]] || CLOSE_PUNCT.indexOf(segVis[segVis.length - 1]) >= 0)) segCand = 'L';
-            /* 同主分支：仅当挤挂真能省格时才执行（闭号在行尾、本可正常占格） */
+            /* 执行条件：① 能省下一个正文字位（原规则——避免「挤挂无收益、白牺牲标点形态」，
+               用户 2026-09-17 反馈）；或 ② 两行明显不齐（|effR−effL| ≥ 2）——此时收益是「底空少一行」。
+               注：hangN>0 时禁 'L'（尾串已从段末弹出，再挂左行尾会重复扣格）。 */
             var segEff0 = Math.max(segEffR, segEffL),
                 segEffS = Math.max(segEffR - (segCand === 'R' ? 1 : 0), segEffL - (segCand === 'L' ? 1 : 0)),
                 segSpNo = Math.max(1, Math.ceil(segEff0 * m.commentCellNorm / m.cellH - 0.08)),
                 segSpYes = Math.max(1, Math.ceil(segEffS * m.commentCellNorm / m.cellH - 0.08)),
-                segSqz = (segCand && segSpYes < segSpNo) ? segCand : null,
+                segSqz = (segCand && (segSpYes < segSpNo || Math.abs(segEffR - segEffL) >= 2)) ? segCand : null,
                 segEffMax = segSqz ? segEffS : segEff0;
-            var segSpan = Math.min(availRows, Math.max(1,
-              Math.ceil(segEffMax * m.commentCellNorm / m.cellH - 0.08)));   // 同上：整数字位栅格锁（规范注格高）
-            cur.cols[colIdx].items.push({ type: 'comment', chars: seg, row: rowPos, span: segSpan, per: segPer, sqz: hangN ? null : segSqz, hang: hangN, _pos: tk.pos, posArr: tk.posArr ? posArrC.slice(posOff, posOff + rawTake) : undefined });
+            return { rawTake: rawTake, hangN: hangN, seg: seg, segPer: segPer, segSqz: segSqz, kk: kk,
+                     /* 回传**压缩执行后**的两行格数：sqz 令长行再少 1 → 外层按此算真实底空 */
+                     effR: segEffR - (segSqz === 'R' ? 1 : 0), effL: segEffL - (segSqz === 'L' ? 1 : 0),
+                     spanRaw: Math.max(1, Math.ceil(segEffMax * m.commentCellNorm / m.cellH - 0.08)) };
+            };
+            /* 【2026-09-21】四候选择优：(取 k 或 k+1) × (尾串不压缩 / 压缩)。排序键（字典序）：
+                 ① |effR − effL| 最小 —— 正好等于**短子列底空行数**，即用户看得见的「空着一格」；
+                 ② 「不溢出」（spanRaw ≤ availRows）优先 —— 溢出会被外层 Math.min 钳短、行距被挤；
+                 ③ spanRaw 最小；④ k 最小（少挪后文，减少连带位移）。
+               正常块（k 方案本就不溢出且齐平）四项全优 → 此分支不触及，与旧版逐位一致。 */
+            var cands = [];
+            for (var dk = 0; dk <= 3; dk++) {
+              if (k + dk > vis.length) break;
+              cands.push(planSeg(k + dk, false));
+              cands.push(planSeg(k + dk, true));
+            }
+            var ps = cands[0];
+            for (var ci2 = 1; ci2 < cands.length; ci2++) {
+              var cc = cands[ci2], psd = Math.abs(ps.effR - ps.effL), ccd = Math.abs(cc.effR - cc.effL);
+              var pso = ps.spanRaw > availRows + 1e-9, cco = cc.spanRaw > availRows + 1e-9;
+              var better = ccd !== psd ? ccd < psd
+                         : cco !== pso ? !cco
+                         : cc.spanRaw !== ps.spanRaw ? cc.spanRaw < ps.spanRaw
+                         : cc.kk < ps.kk;
+              if (better) ps = cc;
+            }
+            var rawTake = ps.rawTake, hangN = ps.hangN, seg = ps.seg,
+                segPer = ps.segPer, segSqz = ps.segSqz;
+            var segSpan = Math.min(availRows, ps.spanRaw);   // 同上：整数字位栅格锁（规范注格高）
+            /* sqz 与 hang 可并存（各自从右行/左行尾弹字）：仅当 sqz='L' 时二者都弹左行 →
+               与 hang 的扣除口径重复计数，弃 sqz（折点标点仍由 hang 压缩，不占格）。 */
+            cur.cols[colIdx].items.push({ type: 'comment', chars: seg, row: rowPos, span: segSpan, per: segPer, sqz: (hangN && segSqz === 'L') ? null : segSqz, hang: hangN, _pos: tk.pos, posArr: tk.posArr ? posArrC.slice(posOff, posOff + rawTake) : undefined });
             rowPos += segSpan;
             chars = chars.slice(rawTake);
             posOff += rawTake;                 // 与 chars 同步推进，下一段 posArr 才对齐
@@ -1241,6 +1299,17 @@
     var prevGY = null, prevGX = cx;                 // 本列上一个非悬空字形中心，供 hang 标点挂靠
     var bandB = m.frame ? (m.frame.y + m.frame.h) - (m.rowStartY + m.rowH) : m.fontSize;
     // 下底线→版框底余白带高（避头点出格落位用）
+    /* 【2026-09-21】夹注「标点压缩」共用槽——块底那批被压缩的标点一律锚同一基准：
+       槽顶 = 段末字**墨迹底**（紧挂末字之后），槽底 = 版框底（无版框则退一个正文格），
+       槽高上限半格（不越版框、也不飘远）；落位一律「墨迹心对准槽心」。
+       改前：挤挂 sqz 的列底档锚「正文格网底 + 余白带半宽」、折列吞尾 hang 锚「末字墨迹底 + 槽心」，
+       同一页里左子列(hang)会比右子列(sqz)高 0.18 注字格 → 看着「不一般齐」（用户截图反馈：
+       「同于失：」的『：』与「飘风：」的『：』一高一低，同为避头压缩却两套落位）。
+       两条路径改成共用本函数后，同页两子列的压缩标点严格同 y。 */
+    function hungSlot(inkBot) {
+      var sBot = m.frame ? (m.frame.y + m.frame.h) : inkBot + m.cellH;
+      return { top: inkBot, h: Math.min(Math.max(0, sBot - inkBot), m.cellH * 0.5) };
+    }
 
     for (var i = 0; i < col.items.length; i++) {
       var it = col.items[i];
@@ -1484,7 +1553,8 @@
           var hRow = rows[1].length ? 1 : 0, hLn = rows[hRow];
           if (!hLn.length) break;
           var hLast = hLn[hLn.length - 1];
-          if (typeof hLast !== 'string' || CLOSE_PUNCT.indexOf(hLast) < 0) break;
+          /* 【2026-09-21】与分页端同口径：闭号与悬空点（：；、，）都是避头标点，拉回本段后一并压缩沉底 */
+          if (typeof hLast !== 'string' || (CLOSE_PUNCT.indexOf(hLast) < 0 && !cnopSet[hLast])) break;
           hangChs.unshift(hLn.pop());
           if (pRows[hRow]) hangPosArr.unshift(pRows[hRow].pop());
           hRemain--;
@@ -1637,8 +1707,11 @@
                       ' text-anchor="middle" dominant-baseline="central">' + esc(cMode === 'judou' ? judouGlyph(sqzCh) : sqzCh) + '</text>');
                 }
               }
-            } else if (sqEdge) {                                 // 块已到列底 → 下底线→版框余白带（带内垂直居中）
-              var qyB = (m.rowStartY + m.rowH) + Math.min(m.cellH * 0.5, bandB / 2);
+            } else if (sqEdge) {                                 // 块已到列底 → 与折列吞尾 hang 同槽（段末字墨迹底→版框底，墨迹心落槽心）
+              /* 【2026-09-21】此处原为「正文格网底 + 余白带半宽」——与 hang 的槽不同基准，
+                 同一页左/右两子列的压缩标点因此不一般齐（见文件上方 hungSlot 注释）。 */
+              var qsB = hungSlot(pGY + 0.5 * K * fsC);
+              var qyB = qsB.top + qsB.h / 2;
               if (crotSet[sqzCh]) {
                 /* rot 类同样沉排：缩到悬空尺寸（盒高上限 = 带高×1.2，墨迹恒在带内）→ 保住竖排字形，
                    又不压块内末字、不越列框 */
@@ -1682,22 +1755,25 @@
            仅右列有字时挂右列（读序：右列 → 左列 → 段末字之后的闭号）。 */
         if (hangChs.length && pGY !== null) {
           var hRx = rows[1].length ? cx - quarter : cx + quarter;
-          var hTop = pGY + 0.5 * K * fsC;                                  // 段末字墨迹底
-          var hBot = m.frame ? m.frame.y + m.frame.h : hTop + m.cellH;
-          var hSlot = Math.min(Math.max(0, hBot - hTop), m.cellH * 0.5) / hangChs.length;
+          var hsB = hungSlot(pGY + 0.5 * K * fsC);                         // 共用槽（与挤挂的列底档同基准）
+          var hTop = hsB.top;                                              // 段末字墨迹底
+          var hSlot = hsB.h / hangChs.length;                              // 多标点均分槽高
           for (var hzi = 0; hzi < hangChs.length; hzi++) {
             var hzc = hangChs[hzi];
             var hzRot = !!crotSet[hzc];
             var hzPh = PUNCT_INK[hzc] || (hzRot ? [0.45, 0.424] : [0.5, 0.86]);
             var hzSize = Math.min(fsC, hSlot * 0.94 / hzPh[0]);            // 全尺寸；放不下才等比缩
             var hzY = hTop + hSlot * (hzi + 0.5) - hzSize * (hzPh[1] - 0.5); // 墨迹心对准槽心
+            var hzX = hRx + fsC * ((t.comment_comma_pos === 'center') ? 0.25 : 0.5) + fsC * pRightC;
             if (hzRot) {
               out.push(foPunct(t, hRx + fsC * pRightC, hzY - hzSize * pUpC, hzSize, cCol, fontC, hzc, 'v-c v-c90 v-chang v-csqz', 0));
+            } else if (cMode === 'judou' && judouGlyph(hzc) === JUDOU_RING) {
+              /* 句读档：与占格标点同款——圈心取墨迹点、字号取悬空尺寸（同下方 sqz 分支口径） */
+              out.push(ringSvg(hzX - hzSize * 0.25, hzY + hzSize * 0.36, fsC * num(t.jd_ring_scale, 0.26), fsC * num(t.jd_ring_stroke, 0.05), cCol, 'v-c v-cjd v-cring v-csqz'));
             } else {
-              var hzX = hRx + fsC * ((t.comment_comma_pos === 'center') ? 0.25 : 0.5) + fsC * pRightC;
-              out.push('<text class="v-c v-cnop v-chang v-csqz" data-i="' + (hangPosArr[hzi] != null ? hangPosArr[hzi] : it._pos) + '" x="' + f(hzX) + '" y="' + f(hzY - hzSize * pUpC) +
+              out.push('<text class="v-c ' + (cMode === 'judou' ? 'v-cjd v-cdot' : 'v-cnop') + ' v-chang v-csqz" data-i="' + (hangPosArr[hzi] != null ? hangPosArr[hzi] : it._pos) + '" x="' + f(hzX) + '" y="' + f(hzY - hzSize * pUpC) +
                 '" font-size="' + f(hzSize) + '" fill="' + cCol + '" font-family="' + esc(fontC) + '"' +
-                ' text-anchor="middle" dominant-baseline="central">' + esc(hzc) + '</text>');
+                ' text-anchor="middle" dominant-baseline="central">' + esc(cMode === 'judou' ? judouGlyph(hzc) : hzc) + '</text>');
             }
           }
         }
