@@ -2,7 +2,6 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState, Compartment } from '@codemirror/state'
-import { markdown } from '@codemirror/lang-markdown'
 import {
   curChapter, curBlockName, curUnit, isTocUnit, isTocDerived, tocUnit, setTocMode, setTocDerived,
   tplEdit, toast, editorFontSize, setEditorStatus, unitFlowText, setEditorSel, onGotoSource,
@@ -66,7 +65,12 @@ onMounted(() => {
       doc: editorDoc.value,
     extensions: [
       basicSetup,
-      markdown(),
+      /* 不挂 `markdown()`：源文是自定义古籍 DSL（`[..]` 强调 / `{..}` 徽标 / `【..】` 夹注 / `#` 章题），
+         与 markdown 语法直接撞车——lezer-markdown 把 `[任意内容]`（无 `(url)` 也算）判为 Link，
+         basicSetup 的 defaultHighlightStyle 给 tags.link / tags.heading 加 `textDecoration: underline`
+         （且不改颜色），于是源码态下 `[]` 包住的段落通体黑下划线、`#` 章题被加粗划线。
+         这些语义由 core/editorDeco.ts 的美化态装饰负责，不需要 markdown 高亮。
+         回归：tools/probe-md-bracket.mjs */
       EditorView.lineWrapping,
       beautifyField,
       decoPlugin,
