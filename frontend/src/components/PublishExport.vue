@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { LayoutEngine } from '../core/engine'
 import { prepareTemplateForRender } from '../core/fontcheck'
 import {
@@ -17,9 +17,10 @@ import PubGroupEditor from './PubGroupEditor.vue'
 const E = LayoutEngine
 
 /* ============ 册组装编辑（左/中栏） ============ */
-/* sel = -1 表示「整书合并」（虚拟项，不可编辑，导出时自动拼接全部正文 + 包装叶）；否则为册索引 */
-const sel = ref(-1)
-const cur = computed(() => (sel.value >= 0 ? proj.pubs[sel.value] : null))
+/* sel = null 表示「未选择」；-1 表示「整书合并」（虚拟项）；>=0 为册索引。
+ * 默认 null → 进入页面不渲染任何预览，秒开。点击左侧任意项才异步渲染并带进度。 */
+const sel = ref<number | null>(null)
+const cur = computed(() => (sel.value !== null && sel.value >= 0) ? proj.pubs[sel.value] : null)
 const packItems = computed(() => availablePackLeaves())
 const guideItems = computed(() => proj.tree.guide.map(g => g.name))
 const appendixItems = computed(() => proj.tree.appendix.map(a => a.name))
@@ -56,13 +57,12 @@ function toggleChap(vid: string, cid: string, on: boolean) {
 function setFront(g: PubGroup[]) { if (cur.value) cur.value.front = g }
 function setBack(g: PubGroup[]) { if (cur.value) cur.value.back = g }
 
-async function onAdd() { sel.value = addPub() }
+function onAdd() { selectAndRender(addPub()) }
 async function onDel(i: number) {
   const t = proj.pubs[i]?.title ?? ''
   if (!(await appConfirm(`删除册「${t}」？该册的导出组装配置将丢失。`))) return
   deletePub(i)
-  if (sel.value === i) sel.value = -1
-  else if (sel.value > i) sel.value--
+  await selectAndRender(proj.pubs.length ? 0 : -1)
 }
 
 /* ============ 预览 + 导出（右栏） ============ */
@@ -84,8 +84,7 @@ function bookMetrics() { return E.computeMetrics(tpl) }
 
 /* 图片素材预热（与原 ExportPanel 一致）：特殊页/堂号/水印未就绪时 <image> 不会进 SVG → 导出静默缺图 */
 const ASSET_KEYS = ['seam_stamp_src', 'watermark_src']
-const renderTick = ref(0)
-function collectAssets(): string[] {
+async function warmAssets(): Promise<void> {
   const out = new Set<string>()
   const add = (o: any) => { if (o) for (const k of ASSET_KEYS) if (o[k]) out.add(String(o[k])) }
   add(tpl)
@@ -96,121 +95,149 @@ function collectAssets(): string[] {
     if (c.illus && !String(c.illus).startsWith('data:')) out.add(String(c.illus))
     if (c.bg && !String(c.bg).startsWith('data:') && !String(c.bg).includes('/')) out.add(String(c.bg))
   }
-  return [...out]
-}
-async function warmAssets(): Promise<void> {
-  const ns = collectAssets()
-  if (!ns.length) return
-  await ensureAssets(ns)
-  renderTick.value++
+  if (!out.size) return
+  await ensureAssets([...out])
 }
 
 const PACK_LEAF: Record<string, 'cover' | 'fly' | 'colophon'> = { '封面': 'cover', '扉页': 'fly', '尾页': 'colophon' }
 
-/* 整书合并：包装前叶 + 全部单元正文（连续页码）+ 包装尾叶；包装不编页码。三叶恒输出，整书级取舍看「包含特殊页」。 */
-function buildBookSpreads(): Spread[] {
-  const out: Spread[] = []
+/* 整书合并的单元序列：导读 → 卷文 → 附录（预览与计数共用，保证口径一致） */
+function bookUnits(): (Block | Volume)[] { return [...proj.tree.guide, ...proj.tree.scrolls, ...proj.tree.appendix] }
+
+/* 叶计划：只分页（快速），特殊页直接成图，正文页留待渲染阶段逐叶成图。
+ * 预览与导出共用同一份计划，保证所见即所得、且分页只做一次。target=-1 整书合并，>=0 某分册。 */
+interface PlanLeaf { label: string; W: number; H: number; svg?: string; tpl?: any; page?: any }
+const arrOf = (v: string | string[] | undefined): string[] => v == null ? [] : Array.isArray(v) ? v : [v]
+
+function planSpreads(target: number): PlanLeaf[] {
+  const out: PlanLeaf[] = []
   const m = bookMetrics()
-  if (includeSpecial.value) {
-    out.push({ label: '封面', svg: renderSpread(null, 'cover', resolveLeafCfg('cover'), m.W, m.H), W: m.W, H: m.H })
-    out.push({ label: '扉页', svg: renderSpread(null, 'fly', resolveLeafCfg('fly'), m.W, m.H), W: m.W, H: m.H })
+  const no = { n: 0 }
+  const pushSpecial = (nm: string, k: 'cover' | 'fly' | 'colophon', volLabel?: string) => {
+    const cfg = resolveLeafCfg(k)
+    if (volLabel) cfg.volLabel = volLabel
+    out.push({ label: nm, W: m.W, H: m.H, svg: renderSpread(null, k, cfg, m.W, m.H) })
   }
-  let pageNo = 0
-  for (const u of [...proj.tree.guide, ...proj.tree.scrolls, ...proj.tree.appendix]) {
-    const txt = unitFlowText(u); if (!txt) continue
-    const t = resolveTplBlock(u); const mm = E.computeMetrics(t)
-    const vl = volLabelOf(u)
-    const t2 = prepareTemplateForRender(t)
-    E.paginate(t2, txt).pages.forEach((p: any) => {
-      p.leaf = ++pageNo; p.volName = vl
-      out.push({ label: `${u.name} ${pageNo}`, svg: E.renderPage(t2, p, { guides: 0 }), W: mm.W, H: mm.H })
-    })
-  }
-  if (includeSpecial.value)
-    out.push({ label: '尾页', svg: renderSpread(null, 'colophon', resolveLeafCfg('colophon'), m.W, m.H), W: m.W, H: m.H })
-  return out
-}
-
-/* 按册：front 前辅文 → chapters 按卷/章 → back 后辅文；册内页码从 1 重排；包装叶无页码。
- * inc 控制是否输出该册的包装叶（封面/扉页/尾页），一刀切即「包含特殊页」。 */
-function buildPub(pub: any, inc: boolean): Spread[] {
-  const out: Spread[] = []
-  let pageNo = 0
-  const pushUnit = (u?: Block | Volume) => {
-    if (!u) return
-    const txt = unitFlowText(u); if (!txt) return
-    const t = resolveTplBlock(u); const mm = E.computeMetrics(t)
-    const vl = volLabelOf(u)
-    const t2 = prepareTemplateForRender(t)
-    E.paginate(t2, txt).pages.forEach((p: any) => {
-      p.leaf = ++pageNo; p.volName = vl
-      out.push({ label: `${u.name} ${pageNo}`, svg: E.renderPage(t2, p, { guides: 0 }), W: mm.W, H: mm.H })
-    })
-  }
-  const pushGroup = (g: PubGroup) => {
-    for (const nm of (Array.isArray(g.pack) ? g.pack : g.pack ? [g.pack] : [])) {
-      if (!inc) continue
-      const leaf = PACK_LEAF[nm]; if (!leaf) continue
-      const m = bookMetrics()
-      const cfg = resolveLeafCfg(leaf)
-      if (leaf !== 'colophon') cfg.volLabel = pub.title   // 封面/扉页书名下方小字 = 当前册名
-      out.push({ label: nm, svg: renderSpread(null, leaf, cfg, m.W, m.H), W: m.W, H: m.H })
+  const pushText = (tplUnit: any, flowText: string, baseName: string, volName: string) => {
+    if (!flowText) return
+    const t = prepareTemplateForRender(resolveTplBlock(tplUnit))
+    const mm = E.computeMetrics(t)
+    for (const p of E.paginate(t, flowText).pages as any[]) {
+      p.leaf = ++no.n; p.volName = volName
+      out.push({ label: `${baseName} ${no.n}`, W: mm.W, H: mm.H, tpl: t, page: p })
     }
-    for (const nm of (Array.isArray(g.guide) ? g.guide : g.guide ? [g.guide] : [])) pushUnit(proj.tree.guide.find(u => u.name === nm))
-    for (const nm of (Array.isArray(g.appendix) ? g.appendix : g.appendix ? [g.appendix] : [])) pushUnit(proj.tree.appendix.find(u => u.name === nm))
   }
-  for (const g of pub.front || []) pushGroup(g)
-  for (const s of pub.chapters || []) {
-    const vol = proj.tree.scrolls.find(v => v.id === s.volume); if (!vol) continue
-    const chaps = s.chapters?.length ? vol.chapters.filter(c => s.chapters!.includes(c.id)) : vol.chapters
-    const txt = chaps.map(c => c.text).filter(Boolean).join('\n')
-    if (!txt) continue
-    const t = resolveTplBlock(vol); const mm = E.computeMetrics(t)
-    const t2 = prepareTemplateForRender(t)
-    E.paginate(t2, txt).pages.forEach((p: any) => {
-      p.leaf = ++pageNo; p.volName = vol.name || ''
-      out.push({ label: `${vol.name || '正文'} ${pageNo}`, svg: E.renderPage(t2, p, { guides: 0 }), W: mm.W, H: mm.H })
-    })
+  if (target < 0) {
+    if (includeSpecial.value) { pushSpecial('封面', 'cover'); pushSpecial('扉页', 'fly') }
+    for (const u of bookUnits()) pushText(u, unitFlowText(u), u.name, volLabelOf(u))
+    if (includeSpecial.value) pushSpecial('尾页', 'colophon')
+  } else {
+    const p = proj.pubs[target]; if (!p) return out
+    const pushGroup = (g: PubGroup) => {
+      for (const nm of arrOf(g.pack)) {
+        if (!includeSpecial.value) continue
+        const k = PACK_LEAF[nm]; if (!k) continue
+        pushSpecial(nm, k, k !== 'colophon' ? p.title : undefined)
+      }
+      for (const nm of arrOf(g.guide)) { const u = proj.tree.guide.find(x => x.name === nm); if (u) pushText(u, unitFlowText(u), nm, '') }
+      for (const nm of arrOf(g.appendix)) { const u = proj.tree.appendix.find(x => x.name === nm); if (u) pushText(u, unitFlowText(u), nm, '') }
+    }
+    for (const g of p.front || []) pushGroup(g)
+    for (const s of p.chapters || []) {
+      const vol = proj.tree.scrolls.find(v => v.id === s.volume); if (!vol) continue
+      const chaps = s.chapters?.length ? vol.chapters.filter(c => s.chapters!.includes(c.id)) : vol.chapters
+      const txt = chaps.map(c => c.text).filter(Boolean).join('\n')
+      pushText(vol, txt, vol.name || '正文', vol.name || '')
+    }
+    for (const g of p.back || []) pushGroup(g)
   }
-  for (const g of pub.back || []) pushGroup(g)
   return out
 }
 
-/* 当前选中成品：整书合并 / 某分册；renderTick 触发素材重算让 <image> 进 SVG */
-interface Item { key: string; name: string; spreads: Spread[] }
-const selItem = computed<Item>(() => {
-  void renderTick.value
-  if (sel.value < 0 || !proj.pubs[sel.value]) return { key: 'book', name: '整书合并', spreads: buildBookSpreads() }
-  const p = proj.pubs[sel.value]
-  return { key: `pub:${sel.value}`, name: p.title, spreads: buildPub(p, includeSpecial.value) }
+function renderLeaf(leaf: PlanLeaf): string {
+  return leaf.svg ?? E.renderPage(leaf.tpl!, leaf.page!, { guides: 0 })
+}
+
+/* 当前选择的叶数（仅分页，不渲染 SVG）：列表与导出按钮共读。sel===null 时为 0（未选，导出禁用）。 */
+const expCount = computed(() => (sel.value === null ? 0 : planSpreads(sel.value).length))
+/* 整书合并的叶数：列表常显，让用户预估渲染成本；与计划口径同源。 */
+const bookCount = computed(() => planSpreads(-1).length)
+
+/* 预览渲染：异步分页 + 逐叶成图，带进度；切换选择会取消上一次渲染（renderToken）。
+ * 渲染结果按「册稳定 id + 包含特殊页」缓存：重复点同一项 / 切回已渲染项 = 秒回，不做无谓重渲。 */
+const spreads = ref<Spread[]>([])
+const rendering = ref(false)
+const renderProgress = ref({ cur: 0, total: 0 })
+let renderToken = 0
+const renderCache = new Map<string, Spread[]>()
+/* 缓存键：整书合并用 'book'，分册用其稳定 id（不用下标，避免删册后下标错位命中旧项）；
+ * 含 includeSpecial 使「含/不含特殊页」两版互不污染。 */
+function cacheKey(target: number): string {
+  const id = target < 0 ? 'book' : (proj.pubs[target]?.id ?? `pub:${target}`)
+  return `${id}:${includeSpecial.value ? 1 : 0}`
+}
+const nextFrame = () => new Promise<void>(r => requestAnimationFrame(() => r()))
+async function selectAndRender(target: number, force = false) {
+  /* 命中缓存且非强制 → 直接复用上次叶数组，秒回（不重算不重渲） */
+  if (!force) {
+    const hit = renderCache.get(cacheKey(target))
+    if (hit) { sel.value = target; spreads.value = hit; return }
+  }
+  sel.value = target
+  const token = ++renderToken
+  spreads.value = []
+  rendering.value = true
+  renderProgress.value = { cur: 0, total: 0 }
+  await nextFrame()                 // 先让「正在渲染」上屏一帧，避免点下去像卡死
+  await warmAssets()                 // 确保 <image> 进 SVG（否则缺图）
+  if (token !== renderToken) return
+  const plan = planSpreads(target)
+  renderProgress.value = { cur: 0, total: plan.length }
+  for (let i = 0; i < plan.length; i++) {
+    if (token !== renderToken) return
+    const leaf = plan[i]
+    spreads.value.push({ label: leaf.label, svg: renderLeaf(leaf), W: leaf.W, H: leaf.H })
+    renderProgress.value = { cur: i + 1, total: plan.length }
+    if ((i + 1) % 2 === 0) await nextFrame()   // 每 2 叶让出一帧，保持界面可响应
+  }
+  if (token !== renderToken) return
+  renderCache.set(cacheKey(target), spreads.value)   // 渲染完成才入缓存，半成品/被取消的不存
+  rendering.value = false
+}
+
+/* 切换包含特殊页时，清除当前项的缓存（两版都清）后强制重渲，保证预览与勾选一致 */
+watch(includeSpecial, () => {
+  if (sel.value !== null) {
+    const id = sel.value < 0 ? 'book' : (proj.pubs[sel.value]?.id ?? `pub:${sel.value}`)
+    renderCache.delete(`${id}:0`); renderCache.delete(`${id}:1`)
+    selectAndRender(sel.value, true)
+  }
 })
-const spreads = computed<Spread[]>(() => selItem.value.spreads)
-const bookLen = computed(() => buildBookSpreads().length)
 
 function stamp() { const d = new Date(); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` }
 function bookFileName() { return `${(proj.meta.title || proj.name || 'guji')}-${stamp()}.pdf` }
 function pubFileName(p: any) { return `${p.title}-${stamp()}.pdf` }
-function selPdfName(): string { return sel.value < 0 ? bookFileName() : pubFileName(proj.pubs[sel.value]) }
-function selStem(): string { return sel.value < 0 ? (proj.meta.title || proj.name || 'guji') : proj.pubs[sel.value].title }
+function selPdfName(): string { return sel.value !== null && sel.value >= 0 ? pubFileName(proj.pubs[sel.value]) : bookFileName() }
+function selStem(): string { return sel.value !== null && sel.value >= 0 ? proj.pubs[sel.value].title : (proj.meta.title || proj.name || 'guji') }
 
 async function exportPDF() {
-  const it = selItem.value
-  if (!it.spreads.length) { toast('当前选择没有可导出的内容'); return }
+  if (sel.value === null) { toast('请先在左侧选择整书合并或某个分册'); return }
+  if (!expCount.value) { toast('当前选择没有可导出的内容'); return }
   exporting.value = true; lastOutputDir.value = ''
   done.value = false; expErr.value = null
-  expName.value = selPdfName(); expTotal.value = it.spreads.length; expCur.value = 0
+  expName.value = selPdfName(); expTotal.value = expCount.value; expCur.value = 0
   try {
     await warmAssets()
-    const s = selItem.value!          // 预热后重取：这时 <image> 才已进 SVG
-    expTotal.value = s.spreads.length
+    const plan = planSpreads(sel.value)   // 预热后重新取：特殊页 <image> 此时才进 SVG
+    const total = plan.length
+    expTotal.value = total
     const { PDFDocument } = await import('pdf-lib')
     const doc = await PDFDocument.create()
-    const total = s.spreads.length
     for (let i = 0; i < total; i++) {
-      const sp = s.spreads[i]
-      const blob = await rasterizeSvg(sp.svg, sp.W, sp.H, sp.label)
+      const leaf = plan[i]
+      const blob = await rasterizeSvg(renderLeaf(leaf), leaf.W, leaf.H, leaf.label)
       const img = await doc.embedPng(await blob.arrayBuffer())
-      const pw = sp.W / 300 * 72, ph = sp.H / 300 * 72   // 300dpi px → pt（各叶纸幅可不同，按叶取值）
+      const pw = leaf.W / 300 * 72, ph = leaf.H / 300 * 72   // 300dpi px → pt（各叶纸幅可不同，按叶取值）
       const page = doc.addPage([pw, ph])
       page.drawImage(img, { x: 0, y: 0, width: pw, height: ph })
       expCur.value = i + 1
@@ -235,20 +262,20 @@ async function openOutput() {
 }
 
 async function exportPNG() {
-  const it = selItem.value
-  if (!it.spreads.length) { toast('当前选择没有可导出的内容'); return }
+  if (sel.value === null) { toast('请先在左侧选择整书合并或某个分册'); return }
+  if (!expCount.value) { toast('当前选择没有可导出的内容'); return }
   exporting.value = true; lastOutputDir.value = ''
   done.value = false; expErr.value = null
-  expName.value = `${selStem()}-*.png`; expTotal.value = it.spreads.length; expCur.value = 0
+  expName.value = `${selStem()}-*.png`; expTotal.value = expCount.value; expCur.value = 0
   try {
     await warmAssets()
-    const s = selItem.value!          // 预热后重取：这时 <image> 才已进 SVG
-    const total = s.spreads.length
+    const plan = planSpreads(sel.value)   // 预热后重新取：特殊页 <image> 此时才进 SVG
+    const total = plan.length
     expTotal.value = total
     let od = ''
     for (let i = 0; i < total; i++) {
-      const sp = s.spreads[i]
-      const blob = await rasterizeSvg(sp.svg, sp.W, sp.H, sp.label)
+      const leaf = plan[i]
+      const blob = await rasterizeSvg(renderLeaf(leaf), leaf.W, leaf.H, leaf.label)
       const buf = new Uint8Array(await blob.arrayBuffer())
       const name = `${selStem()}-${String(i + 1).padStart(2, '0')}.png`
       od = await saveBlobToOutput(projectDir.value, name, new Blob([buf as any]))
@@ -272,11 +299,11 @@ async function exportPNG() {
       <div class="grp">册 / 成品</div>
       <button class="add" @click="onAdd">＋ 新建册</button>
       <ul>
-        <li :class="{ on: sel === -1 }" @click="sel = -1">
+        <li :class="{ on: sel === -1 }" @click="selectAndRender(-1)">
           <span class="t">整书合并</span>
-          <span class="cnt">{{ bookLen }} 叶</span>
+          <span class="cnt">{{ bookCount }} 叶</span>
         </li>
-        <li v-for="(p, i) in proj.pubs" :key="p.id" :class="{ on: sel === i }" @click="sel = i">
+        <li v-for="(p, i) in proj.pubs" :key="p.id" :class="{ on: sel === i }" @click="selectAndRender(i)">
           <span class="t">{{ p.title }}</span>
           <button class="del" @click.stop="onDel(i)" title="删除">×</button>
         </li>
@@ -287,13 +314,14 @@ async function exportPNG() {
       <label class="ck"><input v-model="includeSpecial" type="checkbox"> 包含特殊页（封面/扉页/尾页）</label>
 
       <div class="grp">输出</div>
-      <button class="act" :disabled="exporting" @click="exportPDF">导出 PDF（{{ spreads.length }} 叶）</button>
+      <button class="act" :disabled="exporting || !expCount" @click="exportPDF">导出 PDF（{{ expCount }} 叶）</button>
       <button class="act sub" :disabled="exporting" @click="exportPNG">导出 PNG（逐叶）</button>
       <button class="act sub" @click="openOutput">打开导出目录</button>
       <div class="note">
-        选中左侧某项后，导出按钮<span class="hl">仅对该成品生效</span>。<br>
+        选中左侧某项后异步渲染预览，导出按钮<span class="hl">仅对该成品生效</span>。<br>
         <b>整书合并</b>：一份 PDF = 封面·扉页 + 导读·卷文·附录正文（连续页码）+ 尾页。<br>
         <b>分册</b>：按该册 front/chapters/back 三段组装（册内页码从 1 重排），文件名 <b>册名-时间.pdf</b>。<br>
+        选中后<span class="hl">逐叶异步渲染</span>（数十叶成图较慢，带进度），渲染中可继续操作；导出不依赖预览。<br>
         桌面端 PDF/PNG 落到项目 <b>output/</b> 目录。
       </div>
     </aside>
@@ -301,7 +329,7 @@ async function exportPNG() {
     <!-- 中栏：册组装编辑（整书合并为虚拟项，不可编辑） -->
     <section class="edit" v-if="cur">
       <div class="hdr">
-        <input class="title" v-model="proj.pubs[sel].title" placeholder="册名" />
+        <input class="title" v-model="cur.title" placeholder="册名" />
         <span class="meta">正文 {{ cur.chapters.length }} 卷 · 前辅文 {{ cur.front.length }} 项 · 后辅文 {{ cur.back.length }} 项</span>
       </div>
 
@@ -338,16 +366,27 @@ async function exportPNG() {
       </div>
     </section>
     <section class="edit empty" v-else>
-      <p>整书合并为导出时自动拼接全部正文与包装叶，不可单独编排。<br>在左侧新建 / 选择分册以编排前辅文、正文卷章与后辅文。</p>
+      <p v-if="sel === null">请在左侧选择「整书合并」或某个分册，<br>选中后将异步渲染预览，并可直接导出。</p>
+      <p v-else>整书合并为导出时自动拼接全部正文与包装叶，不可单独编排。<br>右侧点击后将异步渲染预览；左下角「导出 PDF」可直接导出整书，无需等待预览。</p>
     </section>
 
     <!-- 右栏：成品预览 -->
     <div class="stage">
-      <figure v-for="(s, i) in spreads" :key="i">
-        <div class="card" v-html="s.svg"></div>
-        <figcaption>{{ i + 1 }}. {{ s.label }}</figcaption>
-      </figure>
-      <div v-if="!spreads.length" class="empty">暂无可导出内容</div>
+      <div v-if="sel === null" class="empty">请选择左侧的整书合并或某个分册以预览</div>
+      <template v-else>
+        <div v-if="rendering" class="gate">
+          <div class="gate-card">
+            <div class="gate-t">正在渲染预览…</div>
+            <div class="gate-d">已生成 {{ renderProgress.cur }} / {{ renderProgress.total }} 叶</div>
+            <div class="gate-bar"><div class="gate-bar-fill" :style="{ width: (renderProgress.total ? Math.round(renderProgress.cur / renderProgress.total * 100) : 0) + '%' }"></div></div>
+          </div>
+        </div>
+        <figure v-for="(s, i) in spreads" :key="i">
+          <div class="card" v-html="s.svg"></div>
+          <figcaption>{{ i + 1 }}. {{ s.label }}</figcaption>
+        </figure>
+        <div v-if="!rendering && !spreads.length" class="empty">该册暂无可导出内容</div>
+      </template>
     </div>
 
     <!-- 导出弹窗：进度 + 文件名 + 常驻赞赏码；导出中不可关闭，完成后停留 -->
@@ -425,6 +464,14 @@ figure { margin: 0; text-align: center; }
 .card :deep(svg) { width: 100%; height: auto; display: block; }
 figcaption { font-size: 11px; color: #888780; margin-top: 6px; line-height: 1.4; }
 .empty { color: #888780; font-size: 13px; padding: 40px; }
+
+/* 预览渲染进度（横跨两列） */
+.gate { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; padding: 48px 20px; }
+.gate-card { max-width: 420px; background: #fff; border: 0.5px solid #e2dfd4; border-radius: 12px; padding: 22px 24px; box-shadow: 0 1px 6px rgba(0, 0, 0, .06); text-align: center; }
+.gate-t { font-size: 15px; font-weight: 600; color: #2c2c2a; }
+.gate-d { font-size: 12px; color: #6b6a63; line-height: 1.9; margin: 10px 0 14px; }
+.gate-bar { height: 6px; background: #eceae2; border-radius: 4px; overflow: hidden; }
+.gate-bar-fill { height: 100%; background: #0f6e56; border-radius: 4px; transition: width .15s ease; }
 
 /* 导出弹窗：进度 + 文件名 + 常驻赞赏码 */
 .exp-mask { position: fixed; inset: 0; z-index: 220; background: rgba(40, 37, 30, .34); display: flex; align-items: center; justify-content: center; }

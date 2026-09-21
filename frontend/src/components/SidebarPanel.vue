@@ -127,6 +127,86 @@ async function addFixedUnit(f: Folder, type: string) {
   selectUnit(f, s.first ? 0 : arr.length - 1, 0)
 }
 
+/* ---- 拖拽排序：仅正文（scrolls）的卷 / 章节 ---- */
+const drag = reactive<{ active: boolean; kind: '' | 'chap' | 'vol'; ui: number; ci: number }>({ active: false, kind: '', ui: -1, ci: -1 })
+const dropAt = reactive<{ kind: '' | 'chap' | 'vol'; ui: number; ci: number }>({ kind: '', ui: -1, ci: -1 })
+
+function dragReset() {
+  drag.active = false; drag.kind = ''; drag.ui = -1; drag.ci = -1
+  dropAt.kind = ''; dropAt.ui = -1; dropAt.ci = -1
+}
+
+/** 按 id 在正文卷里定位章节，返回新下标（移动后用于保持选中） */
+function locateChapter(id: string): { ui: number; ci: number } | null {
+  const arr = proj.tree.scrolls
+  for (let ui = 0; ui < arr.length; ui++) {
+    const ci = arr[ui].chapters.findIndex(c => c.id === id)
+    if (ci >= 0) return { ui, ci }
+  }
+  return null
+}
+
+function onChapDragStart(ui: number, ci: number, e: DragEvent) {
+  if (!e.dataTransfer) return
+  drag.active = true; drag.kind = 'chap'; drag.ui = ui; drag.ci = ci
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', 'chap:' + ui + ':' + ci)
+}
+function onVolDragStart(ui: number, e: DragEvent) {
+  if (!e.dataTransfer) return
+  drag.active = true; drag.kind = 'vol'; drag.ui = ui; drag.ci = -1
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', 'vol:' + ui)
+}
+function onChapDragOver(ui: number, ci: number, e: DragEvent) {
+  if (!drag.active) return
+  e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  if (drag.kind === 'vol') { dropAt.kind = 'vol'; dropAt.ui = ui; dropAt.ci = -1 }
+  else { dropAt.kind = 'chap'; dropAt.ui = ui; dropAt.ci = ci }
+}
+function onVolDragOver(ui: number, e: DragEvent) {
+  if (!drag.active) return
+  e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dropAt.kind = 'vol'; dropAt.ui = ui; dropAt.ci = -1
+}
+function moveChapter(srcUi: number, srcCi: number, dstUi: number, dstCi: number | null) {
+  const arr = proj.tree.scrolls
+  const src = arr[srcUi]; if (!src) return
+  const ch = src.chapters.splice(srcCi, 1)[0]; if (!ch) return
+  const dst = arr[dstUi]; if (!dst) { src.chapters.splice(srcCi, 0, ch); return }
+  if (dstCi === null) dst.chapters.push(ch)
+  else {
+    let t = dstCi
+    if (srcUi === dstUi && srcCi < dstCi) t -= 1   // 同卷内向后移，剔除被移除的空位
+    dst.chapters.splice(t, 0, ch)
+  }
+  const loc = locateChapter(ch.id); if (loc) selectChapter('scrolls', loc.ui, loc.ci)
+}
+function moveVolume(srcUi: number, dstUi: number) {
+  const arr = proj.tree.scrolls
+  if (srcUi === dstUi) return
+  const selChap = cur.folder === 'scrolls' ? arr[cur.ui]?.chapters[cur.ci] : undefined
+  const selId = selChap?.id ?? null
+  const v = arr.splice(srcUi, 1)[0]; if (!v) return
+  let target = dstUi
+  if (srcUi < dstUi) target -= 1
+  arr.splice(target, 0, v)
+  if (selId) { const loc = locateChapter(selId); if (loc) selectChapter('scrolls', loc.ui, loc.ci) }
+  else if (cur.folder === 'scrolls' && cur.ui === srcUi) cur.ui = arr.findIndex(x => x === v)
+}
+function onChapDrop(ui: number, ci: number, e: DragEvent) {
+  e.preventDefault()
+  if (drag.kind === 'chap') moveChapter(drag.ui, drag.ci, ui, ci)
+  else if (drag.kind === 'vol') moveVolume(drag.ui, ui)
+  dragReset()
+}
+function onVolDrop(ui: number, e: DragEvent) {
+  e.preventDefault()
+  if (drag.kind === 'vol') moveVolume(drag.ui, ui)
+  else if (drag.kind === 'chap') moveChapter(drag.ui, drag.ci, ui, null)   // 落到卷行 = 追加到该卷末尾
+  dragReset()
+}
+
 </script>
 
 <template>
@@ -158,7 +238,12 @@ async function addFixedUnit(f: Folder, type: string) {
           <!-- 卷行：正文=命名卷/有覆盖的默认卷；导读/附录一律不渲染（文件行直挂标题下），空单元兜底可删 -->
           <div
             v-if="showUnitRow(f.key, u)"
-            class="vol" :class="{ on: cur.folder === f.key && cur.ui === ui, open: isExpanded(u) }"
+            class="vol" :class="{ on: cur.folder === f.key && cur.ui === ui, open: isExpanded(u), drag: drag.active && drag.kind === 'vol' && drag.ui === ui, dropt: dropAt.kind === 'vol' && dropAt.ui === ui }"
+            draggable="true"
+            @dragstart.stop="onVolDragStart(ui, $event)"
+            @dragover.prevent="onVolDragOver(ui, $event)"
+            @drop.stop="onVolDrop(ui, $event)"
+            @dragend="dragReset()"
             @click="selectUnit(f.key, ui, 0)"
           >
             <span
@@ -202,7 +287,12 @@ async function addFixedUnit(f: Folder, type: string) {
           <div v-if="f.key === 'scrolls' && !isTocUnit(u)" v-show="isExpanded(u)" class="chaps">
             <div
               v-for="(c, ci) in u.chapters" :key="c.id"
-              class="chap" :class="{ on: cur.folder === f.key && cur.ui === ui && cur.ci === ci }"
+              class="chap" :class="{ on: cur.folder === f.key && cur.ui === ui && cur.ci === ci, drag: drag.active && drag.kind === 'chap' && drag.ui === ui && drag.ci === ci, dropt: dropAt.kind === 'chap' && dropAt.ui === ui && dropAt.ci === ci }"
+              draggable="true"
+              @dragstart.stop="onChapDragStart(ui, ci, $event)"
+              @dragover.prevent="onChapDragOver(ui, ci, $event)"
+              @drop.stop="onChapDrop(ui, ci, $event)"
+              @dragend="dragReset()"
               @click="selectChapter(f.key, ui, ci)"
             >
               <span class="t">{{ c.title }}</span>
@@ -238,19 +328,25 @@ async function addFixedUnit(f: Folder, type: string) {
 </template>
 
 <style scoped>
-.side { width: 190px; background: #faf9f6; border-right: 0.5px solid #d3d1c7; display: flex; flex-direction: column; }
+.side { width: 252px; background: #faf9f6; border-right: 0.5px solid #d3d1c7; display: flex; flex-direction: column; }
 .tree { flex: 1; overflow: auto; padding: 6px 6px; }
 .fhdr { font-size: 11px; color: #6b6a63; margin: 8px 4px 2px; display: flex; align-items: center; justify-content: space-between; font-weight: 600; }
 .adds { display: inline-flex; gap: 2px; }
 .fhdr .add { border: 0; background: none; color: #0f6e56; cursor: pointer; font-size: 11px; padding: 0 4px; }
 .fhdr .add:hover { text-decoration: underline; }
-.vol { display: flex; align-items: center; padding: 5px 6px; margin: 3px 0; background: #f1efe8; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; color: #3b3a35; }
+.vol { display: flex; align-items: center; padding: 5px 6px; margin: 3px 0; background: #f1efe8; border-radius: 6px; cursor: grab; font-size: 12px; font-weight: 600; color: #3b3a35; }
+.vol:active { cursor: grabbing; }
 .vol.on { background: #e1f5ee; color: #0f6e56; }
+.vol.drag { opacity: 0.4; }
+.vol.dropt { background: #cdeee2; box-shadow: inset 0 0 0 1.5px #0f6e56; }
 .chev { flex: none; width: 14px; text-align: center; font-size: 10px; color: #888780; margin-right: 2px; cursor: pointer; user-select: none; }
 .chev.open { color: #5f5e5a; }
 .chaps { margin-left: 10px; padding-left: 8px; border-left: 1.5px solid #e3e1d7; }
-.chap { display: flex; align-items: center; padding: 3px 6px 3px 16px; border-radius: 5px; cursor: pointer; font-size: 12px; color: #5f5e5a; }
+.chap { display: flex; align-items: center; padding: 3px 6px 3px 16px; border-radius: 5px; cursor: grab; font-size: 12px; color: #5f5e5a; }
+.chap:active { cursor: grabbing; }
 .chap.on { background: #e1f5ee; color: #0f6e56; }
+.chap.drag { opacity: 0.4; }
+.chap.dropt { background: #cdeee2; box-shadow: inset 0 0 0 1.5px #0f6e56; }
 .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ovd { flex: none; font-style: normal; font-size: 9px; color: #b8862a; margin-left: 3px; cursor: pointer; letter-spacing: -0.3px; }
 .ovd:hover { color: #b4532a; }
