@@ -9,12 +9,19 @@
  *   - 独立标记 `@ % $ & ~` 隐藏（古籍 DSL 保留符，纯视觉噪音）。
  * 源码态不装饰，显示全部原始标记，便于精确定位与编辑。
  *
+ * 隐藏标记的配套措施（2026-09-21 加，防「看不见的字符被一退格拆散配对」）：
+ *   - `markers` 集合经 `EditorView.atomicRanges` 提供给编辑器 → 光标移动跳过标记；
+ *   - 落单标记（配对已断）不隐藏、改染 `cm-orphan` 警示色 → 断裂这件事一眼可见；
+ *   - 删除守卫见 `core/editorGuard.ts`（**跳过**隐形标记，改删同侧可见字符）。
+ * 扫描口径统一来自 `core/markerScan.ts`。
+ *
  * 注音分隔符与引擎一致：引擎把 tag_ruby（默认 `^^`）拆成首尾字符当分隔符，源文里实际写作
  * 单 caret `字^拼音^`。装饰模块直接读解析后的 tag_ruby，因此用户改过某单元 ruby 标记符也能对齐。
  */
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view'
 import { StateField, StateEffect, RangeSetBuilder } from '@codemirror/state'
 import { resolveTplBlock, curUnit } from '../stores/app'
+import { scanWraps, LONE_MARKS } from './markerScan'
 
 /** 转义正则特殊字符（用于把 tag_ruby 的分隔符安全拼进正则）。 */
 function reEsc(s: string): string {
@@ -82,8 +89,11 @@ const subMark = Decoration.mark({ class: 'cm-sub' })
 const commentMark = Decoration.mark({ class: 'cm-comment' })
 const emphMark = Decoration.mark({ class: 'cm-emph' })
 const badgeMark = Decoration.mark({ class: 'cm-badge' })
+/* 落单标记（有字符、没配对）：不隐藏、反而染成警示色。
+   否则「配对被删断」这件事在美化态里完全不可见——内容悄悄退化成正文，只剩一个孤零零的括号。 */
+const orphanMark = Decoration.mark({ class: 'cm-orphan' })
 
-interface D { from: number; to: number; deco: Decoration; replace?: boolean }
+interface D { from: number; to: number; deco: Decoration; replace?: boolean; marker?: boolean }
 
 /** 扫描一行内联标记。start = 该行在文档中的绝对起始下标；text = 该行文本；rubyRe = 注音正则（按 tag_ruby 动态生成）。 */
 function scanInline(start: number, text: string, out: D[], rubyRe: RegExp) {
@@ -96,31 +106,21 @@ function scanInline(start: number, text: string, out: D[], rubyRe: RegExp) {
     const to = from + m[0].length
     out.push({ from, to, deco: Decoration.replace({ widget: new RubyWidget(base, rt) }), replace: true })
   }
-  // 独立标记 @ % $ & ~ 隐藏
-  const lone = /[@%$&~]/g
+  // 独立标记 @ % $ & ~ 隐藏（`marker` 标记：美化态里它们同样"看不见但占位"，一并做原子区间）
+  const lone = new RegExp('[' + LONE_MARKS.split('').map(reEsc).join('') + ']', 'g')
   let l: RegExpExecArray | null
   while ((l = lone.exec(text))) {
     const p = start + l.index
-    out.push({ from: p, to: p + 1, deco: hiddenMark })
+    out.push({ from: p, to: p + 1, deco: hiddenMark, marker: true })
   }
 }
 
-/** 整篇扫描包裹类标记（允许跨行）。开/闭标记隐藏，内层加样式。 */
-function wrapFull(docText: string, re: RegExp, inner: Decoration, out: D[]) {
-  let mm: RegExpExecArray | null
-  while ((mm = re.exec(docText))) {
-    const openLen = mm[1].length
-    const closeLen = mm[3].length
-    const innerFrom = mm.index + openLen
-    const innerTo = mm.index + mm[0].length - closeLen
-    out.push({ from: mm.index, to: innerFrom, deco: hiddenMark })
-    out.push({ from: innerTo, to: mm.index + mm[0].length, deco: hiddenMark })
-    if (innerFrom < innerTo) out.push({ from: innerFrom, to: innerTo, deco: inner })
-  }
-}
+// wrapFull 已删除：包裹类扫描改走 core/markerScan.ts 的 scanWraps，
+// 让「装饰认得的配对」与「删除守卫认得的配对」共用同一套口径（口径分家必然出鬼故事）。
 
-function buildDeco(view: EditorView, beautify: boolean): DecorationSet {
-  if (!beautify) return Decoration.none
+function buildDeco(view: EditorView, beautify: boolean): { deco: DecorationSet; markers: DecorationSet } {
+  /* 源码态：不装饰，也不得给原子区间 —— 那时括号是**可见正文**，光标必须能自由点选/删除它们。 */
+  if (!beautify) return { deco: Decoration.none, markers: Decoration.none }
   const doc = view.state.doc
   const all: D[] = []
   // 注音分隔符取当前单元解析后的 tag_ruby（引擎同样把 tag_ruby 拆成首尾字符当分隔符）
@@ -152,11 +152,18 @@ function buildDeco(view: EditorView, beautify: boolean): DecorationSet {
       scanInline(start, text, all, rubyRe)
     }
   }
-  // 包裹类允许跨行，必须在整篇文本上扫（按行扫会漏掉换行后的闭括号）
+  // 包裹类允许跨行，必须在整篇文本上扫（按行扫会漏掉换行后的闭括号）。
+  // 扫描口径来自 core/markerScan.ts —— 与删除守卫共用，避免「装饰认得的对，守卫不认」。
   const docText = doc.toString()
-  wrapFull(docText, /([【])([^】]*?)([】])/g, commentMark, all)
-  wrapFull(docText, /([{])([^}]*?)([}])/g, badgeMark, all)
-  wrapFull(docText, /([\[])([^\]]*?)([\]])/g, emphMark, all)
+  const sw = scanWraps(docText)
+  for (const w of sw.wraps) {
+    const inner = w.kind === 'comment' ? commentMark : w.kind === 'badge' ? badgeMark : emphMark
+    all.push({ from: w.open, to: w.open + 1, deco: hiddenMark, marker: true })
+    all.push({ from: w.close, to: w.close + 1, deco: hiddenMark, marker: true })
+    if (w.open + 1 < w.close) all.push({ from: w.open + 1, to: w.close, deco: inner })
+  }
+  // 落单标记：不隐藏、染色示警（有字符、无装饰 = 配对已断，让这件事一眼可见）
+  for (const o of sw.orphans) all.push({ from: o, to: o + 1, deco: orphanMark })
   // 过滤：replace（ruby 控件）区间覆盖了包裹内层/标记时，去掉重叠的 mark，避免 RangeSet 重叠报错
   const replaces = all.filter(d => d.replace)
   const kept = all.filter(d => {
@@ -166,16 +173,40 @@ function buildDeco(view: EditorView, beautify: boolean): DecorationSet {
   })
   kept.sort((a, b) => a.from - b.from || a.to - b.to)
   const b = new RangeSetBuilder<Decoration>()
-  for (const d of kept) if (d.from < d.to) b.add(d.from, d.to, d.deco)
-  return b.finish()
+  const mb = new RangeSetBuilder<Decoration>()
+  for (const d of kept) {
+    if (d.from >= d.to) continue
+    b.add(d.from, d.to, d.deco)
+    // 原子区间 = 被隐藏的标记符本身（开/闭/独立控制符），供 ViewPlugin.provide 给 atomicRanges
+    if (d.marker) mb.add(d.from, d.to, d.deco)
+  }
+  return { deco: b.finish(), markers: mb.finish() }
 }
 
 export const decoPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet
-  constructor(view: EditorView) { this.decorations = buildDeco(view, view.state.field(beautifyField)) }
+  markers: DecorationSet
+  constructor(view: EditorView) {
+    const r = buildDeco(view, view.state.field(beautifyField))
+    this.decorations = r.deco
+    this.markers = r.markers
+  }
   update(u: ViewUpdate) {
     const changed = u.docChanged || u.viewportChanged ||
       u.transactions.some(tr => tr.effects.some(e => e.is(setBeautify)))
-    if (changed) this.decorations = buildDeco(u.view, u.state.field(beautifyField))
+    if (changed) {
+      const r = buildDeco(u.view, u.state.field(beautifyField))
+      this.decorations = r.deco
+      this.markers = r.markers
+    }
   }
-}, { decorations: v => v.decorations })
+}, {
+  decorations: v => v.decorations,
+  /* 原子区间：光标移动/选区扩展跳过隐藏标记，不再有「脚边看不见的字符」。
+     注意它只影响光标移动，**不阻止**删除——所以还配了 editorGuard 的跳过守卫。
+     provide 回调拿到的是**插件实例**（不是插件值），须经 view.plugin(...) 取本次构建的 markers。 */
+  provide: plugin => EditorView.atomicRanges.of(view => {
+    const inst = view.plugin(plugin)
+    return inst ? inst.markers : Decoration.none
+  }),
+})

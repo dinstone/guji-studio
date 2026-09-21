@@ -7,6 +7,7 @@ import {
   tplEdit, toast, editorFontSize, setEditorStatus, unitFlowText, setEditorSel, onGotoSource,
 } from '../stores/app'
 import { beautifyField, setBeautify, decoPlugin, linkHighlightField, setLinkHighlight } from '../core/editorDeco'
+import { markerGuardKeymap } from '../core/editorGuard'
 import { autoRuby } from '../core/ruby'
 import { clearMarkup } from '../core/markup'
 import { countChars, countLines } from '../core/textstat'
@@ -64,6 +65,10 @@ onMounted(() => {
     state: EditorState.create({
       doc: editorDoc.value,
     extensions: [
+      /* 隐藏标记的删除守卫：退格/删除命中 `【】`/`{}`/`[]` 的一端时，连带配对一起删
+         （= 取消该标记，内容保留），避免只删一端留下落单括号。
+         用 Prec.highest + 排在 basicSetup 之前，保证先于 defaultKeymap 匹配。 */
+      markerGuardKeymap,
       basicSetup,
       /* 不挂 `markdown()`：源文是自定义古籍 DSL（`[..]` 强调 / `{..}` 徽标 / `【..】` 夹注 / `#` 章题），
          与 markdown 语法直接撞车——lezer-markdown 把 `[任意内容]`（无 `(url)` 也算）判为 Link，
@@ -336,6 +341,13 @@ async function insert(m: Mark) {
 .cm-sub { font-size: 1.2em; font-weight: 600; color: #9e2b25; }
 .cm-comment { color: #8a6d3b; font-size: .82em; background: #f3ead6; border-radius: 3px; padding: 0 2px; }
 .cm-emph { color: #1a7f37; font-weight: 600; }
+/* 落单标记警示：美化态本该隐藏的 `【】`/`{}`/`[]` 若有字符没配对（多半是刚被误删了另一端），
+   就把它染成警示红——否则「配对被删断」在美化态里完全看不出，内容悄悄退化成正文。 */
+.cm-orphan {
+  color: #b3261e; background: #fde7e5;
+  border-radius: 3px; padding: 0 1px;
+  box-shadow: inset 0 0 0 1px #eeb4ae;
+}
 .cm-badge {
   color: #2f4a9e; background: #e7ecf9; border: 0.5px solid #bcc8ee;
   border-radius: 999px; padding: 0 7px;
