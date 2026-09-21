@@ -321,11 +321,25 @@ async function insert(m: Mark) {
 
 <!-- 美化态装饰样式：作用于 CodeMirror 内部 DOM，必须全局（scoped 不会命中 CM 动态节点） -->
 <style>
+/* 五类语义色（美化态专用，彼此不撞色）：
+     正文 #2c2c2a（继承 body）· 标题/二级标题 朱红 #9e2b25 · 夹注 赭石 #8a6d3b
+     · 强调 松绿 #1a7f37 · 徽标 靛蓝 #2f4a9e
+   注意美化态是「语义色编码」，与书页实际输出无关——书页默认里标题/正文/夹注/强调全是黑，
+   只有徽标是朱红（badge_color）。因此配色目标是**五类互不撞色**，不是复刻书页。
+   徽标原先用橙 #b35c00，与夹注赭石、标题朱红挤在同一暖色家族里难以分辨；
+   改用五色中唯一的冷色，并放大到与正文同字号 + 加粗 + 描边药丸，一眼可从正文里挑出。 */
 .cm-chapter { font-size: 1.5em; font-weight: 700; color: #9e2b25; }
 .cm-sub { font-size: 1.2em; font-weight: 600; color: #9e2b25; }
 .cm-comment { color: #8a6d3b; font-size: .82em; background: #f3ead6; border-radius: 3px; padding: 0 2px; }
 .cm-emph { color: #1a7f37; font-weight: 600; }
-.cm-badge { color: #b35c00; background: #fff1de; border-radius: 10px; padding: 0 5px; font-size: .9em; }
+.cm-badge {
+  color: #2f4a9e; background: #e7ecf9; border: 0.5px solid #bcc8ee;
+  border-radius: 999px; padding: 0 7px;
+  font-size: 1em; font-weight: 600;
+}
+/* 夹注里的徽标：.cm-comment 把字号压到 .82em，徽标跟着缩会变得比周围注字还小、更认不出；
+   反其道放大一档，保证「徽标恒不小于所在文本」 */
+.cm-comment .cm-badge { font-size: 1.15em; }
 /* 注音：span 容器相对定位，拼音绝对定位到基字正上方（不用原生 <ruby>，避免 contenteditable 下
  * rt 显示异常 + 光标被控件内部困住导致左侧文字选不中）。padding-top 给拼音留白、避免压到上一行。 */
 .cm-ruby { position: relative; display: inline-block; padding-top: .72em; line-height: 1; vertical-align: baseline; }
