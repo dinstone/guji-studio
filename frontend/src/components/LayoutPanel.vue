@@ -9,7 +9,7 @@ import { checkTemplateFonts, prepareTemplateForRender } from '../core/fontcheck'
 import { matchPaper } from '../core/papersize'
 import {
   tplLib, tplSel, tplParams, loadTemplates,
-  applyTemplate, importTplFromBook, renameTpl, deleteTpl, view, proj,
+  applyTemplate, importTplFromBook, renameTpl, deleteTpl, view, proj, bookTitle,
 } from '../stores/app'
 import { appPrompt, appConfirm } from '../stores/dialog'
 
@@ -36,7 +36,11 @@ onMounted(async () => {
 const svg = computed(() => {
   const p = params.value
   if (!p) return ''
-  const t = prepareTemplateForRender(p)
+  /* 模板里的书名恒为空串（内容字段，入库时被 stripContent 清空）→ 样张版心书名位会空着，
+     「书名字号 / 字距 / 颜色」这几个参数就没法在样张上判断。
+     取**与预览同源**的书名（bookTitle()：图书名称 → 项目名称 → 引擎占位），
+     而不是一律用「图书名称」占位 —— 字数不同的书名对字号/字距的观感影响很大。 */
+  const t = prepareTemplateForRender({ ...p, title_text: String(p.title_text || '') || bookTitle() })
   /* 模板显式开启注音（ruby_show=1）时追加注音样例句，让注音参数在样张上可见 */
   const txt = Number(p.ruby_show) === 1 ? SAMPLE_TEXT + '\n' + RUBY_DEMO : SAMPLE_TEXT
   const res = E.paginate(t, txt)

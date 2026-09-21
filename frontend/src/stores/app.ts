@@ -6,7 +6,7 @@ import {
   SPECIAL_DEFAULT, SPECIAL_PAGES_DEFAULT,
   type SpecialCfg, type SpecialPages,
 } from '../core/special'
-import { BUILTIN_TPLS, stripContent, type TplItem } from '../core/presets'
+import { BUILTIN_TPLS, CONTENT_KEYS, stripContent, type TplItem } from '../core/presets'
 import { hasRuby } from '../core/ruby'
 
 /* 目录（派生单元）默认版式差异：版心略放宽让「章名 + 页码」排得开，
@@ -318,6 +318,23 @@ export const bookCharCount = computed(() => {
   }
   return n
 })
+/** 版心/封面书名的**唯一真源**：项目信息里的「图书名称」（book.gvs.meta.title）；
+ *  为空时回落「项目名称」（book.gvs.name）—— 与新建向导/项目信息三处文案
+ *  「留空则使用项目名称」对齐（2026-09-21 用户定：按文案补实现）。
+ *
+ *  绝不回落空串 —— 模板里的 `title_text` 只是投影（导入模板时被 `stripContent` 清空、
+ *  旧项目里也可能是空），拿它当渲染值就会让版心书名位静默空白（用户 2026-09-21 反馈：
+ *  「模板参数没有设置书名参数时，预览不会填充书名」）。
+ *  引擎侧 `String(t.title_text || '').split('')` 对空串得空数组、一个字都不吐，故兜底必须在这里。
+ *  最后一级仍留引擎默认占位（「图书名称」），只在项目名也为空时兜底，不出现空白书名位。 */
+export function bookTitle(): string {
+  const t = String(proj.meta.title || '').trim()
+  if (t) return t
+  const n = String(proj.name || '').trim()
+  if (n) return n
+  return String((LayoutEngine.DEFAULT_TEMPLATE as Record<string, any>).title_text || '')
+}
+
 /** 解析结果收尾：挂「瞬时」键（只活在内存里的解析产物，绝不回写 book.gvs）。
  *  `_rubyOn` = 引擎唯一读的注音开关：0=关 / 1=开。ruby_show=2 自动档在此按全书判定落地。 */
 function finalizeTpl(out: Record<string, any>): Record<string, any> {
@@ -328,13 +345,17 @@ function finalizeTpl(out: Record<string, any>): Record<string, any> {
 
 export function resolveTplBlock(block?: Block | Volume): Record<string, any> {
   const ov = block?.template
-  if (!ov || !Object.keys(ov).length) return finalizeTpl({ ...tpl })
+  /* 书名按真源（项目书名）注入**书级层**，位置在单元覆盖之前 ——
+     目录这类「有意清空书名」的单元覆盖（`TOC_TPL.title_text = ''`）因此仍照常生效，
+     而书级残留的空书名 / 旧书名不会再漏到渲染端。 */
+  const base: Record<string, any> = { ...tpl, title_text: bookTitle() }
+  if (!ov || !Object.keys(ov).length) return finalizeTpl(base)
   /* 单元模板只应存「与书级不同的差异字段」。若种子/旧数据把引擎默认值
    * （如 canvas_background_image:''）也写进覆盖，会把它后面的书级生效值
    * （如宣纹 textures/xuan.jpg）冲掉——目录等派生单元因此拿不到书级宣纹。
    * 故与引擎默认相同的字段视为「无覆盖」跳过，让书级生效值透传。 */
   const D = LayoutEngine.DEFAULT_TEMPLATE as Record<string, any>
-  const out: Record<string, any> = { ...tpl }
+  const out: Record<string, any> = { ...base }
   for (const k of Object.keys(ov)) {
     if (ov[k] === D[k]) continue
     out[k] = ov[k]
@@ -488,10 +509,25 @@ export function tplGet(k: string): any {
     const ov = curTplOv()
     if (k in ov) return ov[k]
   }
+  /* 书级书名的存储真源是项目信息（meta.title），不是版式快照 ——
+     读 tpl 会拿到旧书名/空书名，出现「项目信息改了，版式面板还显示旧值」。
+     此处回**原值**（可以为空 = 未设置），不走 bookTitle() 的占位兜底：
+     字段空 = 没设过；预览里看到的「图书名称」是兜底填充，两者语义不同。 */
+  if (k === 'title_text') return String(proj.meta.title || '')
   return tpl[k]
 }
 
 export function tplSet(k: string, v: any) {
+  /* 书名是**内容字段**（每本书不同、不入模板库）：
+     书级作用域 = 改「这本书的书名」→ 写真源 meta.title（同时镜像进版式快照便于落盘；
+       清空则渲染层回落占位「图书名称」，不会让版心空着）；
+     单元作用域 = 只改本单元 → 写覆盖，空串即「本单元版心不排书名」（目录用的就是这条）。 */
+  if (k === 'title_text') {
+    const s = String(v ?? '')
+    if (tplScope.value === 'unit') curTplOv().title_text = s
+    else { proj.meta.title = s; tpl.title_text = s }
+    return
+  }
   if (tplScope.value === 'unit') curTplOv()[k] = v
   else tpl[k] = v
 }
@@ -593,7 +629,9 @@ export function resolveLeafCfg(kind: 'cover' | 'fly' | 'colophon'): SpecialCfg {
   const base: any = { ...bookSpecial }
   delete base.pages
   if (leaf) Object.assign(base, leaf)
-  if (!base.coverTitle) base.coverTitle = proj.meta.title || ''
+  /* 封面/扉页书名留空 = 沿用全书 —— 与版心同源（bookTitle()），
+     项目书名未填时也拿得到占位，不会漏出一片空白书名 */
+  if (!base.coverTitle) base.coverTitle = bookTitle()
   if (!base.coverAuthor) base.coverAuthor = proj.meta.author || ''
   /* 包装叶双框跟随正文页边距（整叶坐标系）：左右取 margins_left/right；
      扉页/尾页与正文完全一致（上取天头 top、下取地脚 bottom），
@@ -715,11 +753,15 @@ export async function applyTemplate(id: string) {
   /* 防呆：库项里若残留运行时瞬时键（旧版本存下的 _rubyOn / _vert_supported），
      套用时必须剔除——否则会把注音「自动」档钉死成某个具体状态 */
   Object.keys(snap).forEach(k => { if (k.charAt(0) === '_') delete snap[k] })
+  /* 防呆②：**内容字段一律剔除**（书名 / 逐卷卷名）。模板库里这两个键恒为空串
+     （mk() / stripContent 的约定），原样铺进去就会把书级书名冲成空——
+     单元覆盖尤甚：空串 ≠ 引擎默认，resolveTplBlock 合覆盖时不会被跳过，直接盖掉书名。
+     书名/卷名由书注入，见 bookTitle()。 */
+  ;(CONTENT_KEYS as readonly string[]).forEach(k => delete snap[k])
   if (tplScope.value === 'unit') {
     const ov = curTplOv()
     Object.keys(ov).forEach(k => delete ov[k])
     Object.assign(ov, snap)
-    ov.title_text = proj.meta.title || ov.title_text || ''
     toast(`已套用到「${curBlockName()}」：${name}（仅本单元）`)
   } else {
     const volnames = tpl.title_volnames
@@ -727,7 +769,7 @@ export async function applyTemplate(id: string) {
     /* 先铺引擎默认、再覆盖模板值：旧模板（或新增参数之后存下的模板）缺键时不会留 undefined，
        渲染与预览拖动都能拿到确定值 */
     Object.assign(tpl, LayoutEngine.DEFAULT_TEMPLATE, snap)
-    tpl.title_text = proj.meta.title || tpl.title_text || ''
+    tpl.title_text = bookTitle()
     tpl.title_volnames = volnames
     toast('已套用「' + name + '」（书名沿用本项目，卷名保留）')
   }
@@ -978,7 +1020,10 @@ function applyFlat(f: plat.BookProjectFlat) {
   proj.meta.title = f.meta.title
   proj.meta.author = f.meta.author
   assignInto(tpl, f.template, LayoutEngine.DEFAULT_TEMPLATE)
-  if (f.meta.title) tpl.title_text = f.meta.title
+  /* 书级书名恒按真源注入（不再 `if (f.meta.title)` 才注）：
+     「meta.title 有值、template.title_text 为空」是历史数据里常见的错位状态
+     （先套用模板、后填项目书名的项目就会留下它），漏注入会让版心书名一直空着。 */
+  tpl.title_text = bookTitle()
   assignInto(bookSpecial as unknown as Record<string, any>, f.special, SPECIAL_DEFAULT)
   bookSpecial.pages = { ...SPECIAL_PAGES_DEFAULT, ...((f.special?.pages as SpecialPages) || {}) }
   const pool: Record<string, plat.ChapterFull> = {}

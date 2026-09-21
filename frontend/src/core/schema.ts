@@ -109,7 +109,7 @@ export const SCHEMA: SchemaGroup[] = [
     { k: 'comment_font_color', lb: '夹注颜色', type: 'color' },
   ]},
   { id: 'center', title: '九、版心文字（书名 / 卷次 / 页码）', open: 0, items: [
-    { k: 'title_text', lb: '书名', type: 'text' },
+    { k: 'title_text', lb: '书名', type: 'text', tip: '版心书名。真源 = 项目信息里的「图书名称」（改这里即改项目书名，两处同步）；留空则按「项目名称」填充（新建向导/项目信息里那句「留空则使用项目名称」即此义），项目名称也为空时才显示占位「图书名称」，不会留白。单元作用域下改 = 只改本单元，清空即本单元版心不排书名' },
     { k: 'title_postfix', lb: '卷次后缀', type: 'text', ph: '卷X，X 自动替换为卷号', tip: '正文卷已有分组名时按分组名显示，此项仅在无分组名（默认卷/导读附录）时兜底' },
     { k: 'title_volnames', lb: '逐卷卷名', type: 'text', ph: '道经|德经，按卷序以 | 分隔', tip: '正文卷已有分组名时按分组名显示，此项仅作兜底' },
     { k: 'if_tpcenter', lb: '书名居中', type: 'bool' },
