@@ -120,6 +120,20 @@ const width = computed(() => {
   const m = E.computeMetrics(refTpl.value)
   return Math.round(m.W * view.zoom / 100)
 })
+/* 纸张定位：让「版框」在可视区居中，同时保证版框左缘始终可达。
+   margin-left 取「居中位移」与「−纸张自留边」的较大者：
+     · 纸张比容器窄（缩得小）→ 居中位移为正 → 正常居中（与原来的 margin-inline:auto 等价）；
+     · 适宽（版框铺满内容宽）→ 居中位移约 −78px，仍大于 −81px（纸张自留边）→ 版框居中、纸边对称裁掉；
+     · 手动放大更多 → 居中位移越来越负，被 −纸张自留边 兜住 → 纸张自留边正好裁尽、版框左缘贴内边距、
+       右侧可滚到底（纯居中会让左半边永远滚不到，丢内容）。
+   不用 flex 的 justify-content:center：左侧溢出部分同样滚不到。 */
+const pageStyle = computed(() => {
+  const w = width.value
+  const t = refTpl.value as Record<string, any> | null
+  const m = t ? E.computeMetrics(t) : null
+  const bleed = m ? (m.W - m.frame.w) / 2 * view.zoom / 100 : 0   // 单侧纸张自留边的屏显宽度
+  return { width: w + 'px', marginLeft: `max(calc((100% - ${w}px) / 2), ${-bleed}px)` }
+})
 
 /* 底部状态栏：由当前生效版式实时推导几何量与字体信息（与渲染同源，改版式即同步）。
    几何量来自 computeMetrics；字体名优先取引擎内置中文别名（FONT_CN），回退本机本地化名。 */
@@ -149,17 +163,18 @@ const layout = computed(() => {
   }
 })
 watch(layout, v => { if (v) setPreviewLayout(v) }, { immediate: true })
-/* 适宽 = 只按「宽度」分支，让纸张铺满 .pages 的内容宽，左右只余内边距。
-   旧版是 min(宽适配, 高适配) 的整页适配（contain）：面板相对纸张更「宽」时由高度分支
-   决定缩放，页宽装不满内容宽，多出的余量被 .page 的 margin-inline:auto 均分成左右空白
-   （2026-09-21 用户反馈「边框距面板边界太大」）。想整页不滚动请用缩放滑块。
-   取 floor 不取 round：四舍五入会向上取整到比可用宽还宽，反把横向滚动条带出来。 */
+/* 适宽 = 以「版框」（m.frame，外粗线矩形）为基准，让可读的版框铺满 .pages 的内容宽。
+   预览优先看内容（用户 2026-09-21：「既然是预览，肯定是先想看到内容」）：
+     按纸张算 → 版框只占内容宽 86.3%（纸张自留边 240×2），面板边→版框约 97px 空白；
+     按版框算 → 版框铺满，面板边→版框只剩内边距。
+   代价：纸张自留边必然溢出容器（W/frameW = 1.159 倍），由 pageStyle 居中裁切。
+   取 floor 不取 round：四舍五入会向上取整到比可用宽还宽、反而溢出。 */
 const PAGE_PAD = 18                       // 与 .pages 的 padding 保持一致
 function fitZoom() {
   const m = E.computeMetrics(refTpl.value)
   const el = pagesEl.value
   if (!el) return view.zoom
-  const z = Math.floor((el.clientWidth - 2 * PAGE_PAD) / m.W * 100)
+  const z = Math.floor((el.clientWidth - 2 * PAGE_PAD) / m.frame.w * 100)
   return Math.max(10, Math.min(120, z))
 }
 function fit() { view.zoom = fitZoom() }
@@ -391,7 +406,7 @@ onMounted(() => { leaves.value = computeLeaves(); fit(); window.addEventListener
       ref="pagesEl" class="pages" :class="{ dragging: !!dragging }"
       @wheel="onWheel" @mousedown="onDown" @click="onPageClick"
     >
-      <div class="page" :style="{ width: width + 'px' }">
+      <div class="page" :style="pageStyle">
         <div v-for="(svg, i) in svgs" :key="i" class="leaf" v-html="svg" />
       </div>
       <div v-if="!svgs.length" class="none">
@@ -446,8 +461,8 @@ onMounted(() => { leaves.value = computeLeaves(); fit(); window.addEventListener
 }
 .draghint b { font-weight: 600; }
 .draghint .esc { opacity: .75; }
-/* 滚动容器用 block + 子元素 margin-inline:auto 居中：
-   内容小于容器 → auto 边距居中；放大超宽 → auto 边距归零、锚定左侧，整宽可滚动。
+/* 滚动容器用 block + 子元素自定位：`.page` 的实际 margin-left 由 pageStyle 内联给出
+   （max(居中位移, −纸张自留边)），这里保留的 margin-inline:auto 仅在无内联时兜底。
    （flex align-items/justify-content:center 会把左侧溢出滚死；safe center 老 WebKit 不认） */
 /* 放开选中：App.vue 根容器设了 user-select:none 防误选 UI 文字，此处覆盖回 text，
    让书页 SVG 文本可被框选/复制。拖动堂号/水印时仍由 .pages.dragging 临时关掉。 */

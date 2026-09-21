@@ -47,7 +47,9 @@ const width = computed(() => {
   if (!p) return 600
   return Math.round(E.computeMetrics(p).W * view.zoom / 100)
 })
-/* 适宽 = 只按宽度分支（与 PreviewPanel 同口径），左右只余 .stage 的内边距。
+/* 适宽 = 只按宽度分支，纸张铺满 .stage 的内容宽，左右只余内边距。
+   基准与 PreviewPanel 刻意不同：这里按「纸张」(m.W)，预览面板按「版框」(m.frame.w)——
+   本面板是改版式用的，页边距（纸张边→版框）正是要看的对象，按版框算会把纸边裁掉、调不准。
    旧版 min(宽, 高) 的整页适配会让宽面板左右空出一大截；常数 40 也与实际内边距 2×16 不符。
    取 floor 不取 round：向上取整会超出可用宽、带出横向滚动条。 */
 const STAGE_PAD = 16
