@@ -47,12 +47,16 @@ const width = computed(() => {
   if (!p) return 600
   return Math.round(E.computeMetrics(p).W * view.zoom / 100)
 })
+/* 适宽 = 只按宽度分支（与 PreviewPanel 同口径），左右只余 .stage 的内边距。
+   旧版 min(宽, 高) 的整页适配会让宽面板左右空出一大截；常数 40 也与实际内边距 2×16 不符。
+   取 floor 不取 round：向上取整会超出可用宽、带出横向滚动条。 */
+const STAGE_PAD = 16
 function fit() {
   const p = params.value, el = stage.value
   if (!p || !el) return
   const m = E.computeMetrics(p)
-  const z = Math.min((el.clientWidth - 40) / m.W, (el.clientHeight - 40) / m.H) * 100
-  view.zoom = Math.max(10, Math.min(120, Math.round(z)))
+  const z = Math.floor((el.clientWidth - 2 * STAGE_PAD) / m.W * 100)
+  view.zoom = Math.max(10, Math.min(120, z))
 }
 /* 缩放钳制 + 步进：与滑块 min/max/step 对齐（10–120，5 为步） */
 function clampZoom(z: number) { return Math.max(10, Math.min(120, z)) }

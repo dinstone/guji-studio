@@ -149,12 +149,18 @@ const layout = computed(() => {
   }
 })
 watch(layout, v => { if (v) setPreviewLayout(v) }, { immediate: true })
+/* 适宽 = 只按「宽度」分支，让纸张铺满 .pages 的内容宽，左右只余内边距。
+   旧版是 min(宽适配, 高适配) 的整页适配（contain）：面板相对纸张更「宽」时由高度分支
+   决定缩放，页宽装不满内容宽，多出的余量被 .page 的 margin-inline:auto 均分成左右空白
+   （2026-09-21 用户反馈「边框距面板边界太大」）。想整页不滚动请用缩放滑块。
+   取 floor 不取 round：四舍五入会向上取整到比可用宽还宽，反把横向滚动条带出来。 */
+const PAGE_PAD = 18                       // 与 .pages 的 padding 保持一致
 function fitZoom() {
   const m = E.computeMetrics(refTpl.value)
   const el = pagesEl.value
   if (!el) return view.zoom
-  const z = Math.min((el.clientWidth - 60) / m.W, (el.clientHeight - 80) / m.H) * 100
-  return Math.max(10, Math.min(120, Math.round(z)))
+  const z = Math.floor((el.clientWidth - 2 * PAGE_PAD) / m.W * 100)
+  return Math.max(10, Math.min(120, z))
 }
 function fit() { view.zoom = fitZoom() }
 
