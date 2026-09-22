@@ -1361,7 +1361,7 @@
         var aFs = isAcc ? accentFs : fs;
         var aFont = isAcc ? accentFont : fontT;
         var aCol = isAcc ? accentColor : t.text_font_color;
-        var aPCol = isAcc ? accentColor : (num(t.text_comma_zhu, 0) ? ZHU : commaColor);
+        var aPCol = isAcc ? (t.accent_comma_color || accentColor) : (num(t.text_comma_zhu, 0) ? ZHU : commaColor);
         var y = m.rowStartY + (it.row + 0.5) * m.cellH;
         if (isAcc) y += num(t.accent_letter_spacing, 0) * aFs;   // 强调段字距（竖排下为纵向间隙）
         /* 汉字墨迹居中补偿：字形 y 上移 δ×字号（em 框中心 → 汉字墨迹中心）。

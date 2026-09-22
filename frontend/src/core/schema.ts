@@ -182,6 +182,7 @@ export const SCHEMA: SchemaGroup[] = [
     { k: 'accent_font_color', lb: '强调颜色', type: 'color', tip: '缺省 = 正文颜色' },
     { k: 'accent_letter_spacing', lb: '强调字距', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字', tip: '竖排下为字间纵向间隙，0 = 无' },
     { k: 'accent_comma_mode', lb: '强调标点模式', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '缺省 = 跟随正文标点模式；可独立设置强调段标点' },
+    { k: 'accent_comma_color', lb: '强调标点颜色', type: 'color', tip: '缺省 = 强调颜色（与文字同色）；填朱色 #a8322a 即朱印标点' },
     { k: 'accent_comma_nop', lb: '强调·不占位字符', type: 'text', tip: '缺省 = 与正文同字符集（、，。：；！？）' },
     { k: 'accent_comma_90', lb: '强调·竖排标点字符', type: 'text', tip: '缺省 = 与正文同字符集（「」〔〕…（）类），使用字体竖排字形（vert）立起来' },
     { k: 'accent_comma_fullwidth', lb: '强调半角转全角', type: 'bool', tip: '缺省 = 开启；将强调段内半角标点转全角' },
