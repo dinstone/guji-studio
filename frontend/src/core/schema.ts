@@ -91,6 +91,7 @@ export const SCHEMA: SchemaGroup[] = [
     { k: 'row_start_y', lb: '行起始线 Y', type: 'num', min: 0, max: 3000, step: 5, unit: 'px', show: s => !s.row_start_auto },
     { k: 'row_end_auto', lb: '结束线自动', type: 'bool' },
     { k: 'row_delta_y', lb: '末字留白', type: 'num', min: 0, max: 300, step: 5, unit: 'px', show: s => s.row_end_auto },
+    { k: 'wrap_indent', lb: '回行缩进', type: 'seg', opts: [['0', '无'], ['1', '空1字'], ['2', '空2字']], tip: '段首（显式换列 br/章节/% $ &）顶格；回行（正文·强调·夹注自然溢出续列）列头空 N 字格。夹注续列同属溢出续列一并空 N。仅影响续列起始位置，不改字号、标点与末字留白' },
     { k: 'row_end_y', lb: '行结束线 Y', type: 'num', min: 0, max: 3000, step: 5, unit: 'px', show: s => !s.row_end_auto },
     { k: 'text_size_auto', lb: '字号自动', type: 'bool', tip: '字号 = 行高 ÷ (每列字数 × 字距比例)；字格恒锁 = 行高 ÷ 每列字数' },
     { k: 'text_size_fitcol', lb: '字号受限列宽', type: 'bool', show: s => s.text_size_auto },

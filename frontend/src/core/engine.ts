@@ -150,6 +150,7 @@
     /* 行与正文 */
     row_num: 22, row_start_auto: 1, row_top_pad: 36,
     row_start_y: 347, row_end_auto: 1, row_end_y: 2374, row_delta_y: 14,
+    wrap_indent: 0,   // 回行缩进：自然溢出续列列头空 N 字格（默认 0 = 现状，旧模板零影响）
     text_size_auto: 1, text_font1_size: 90, text_ydis: 1.05,
     text_size_fitcol: 1, text_col_ratio: 0.96,   // 自动字号同时受列宽约束：字号 ≤ 列宽 × 0.96
     text_font_color: '#141414', text_font_family: 'song_tc',
@@ -649,6 +650,9 @@
     }
 
     var pages = [], cur = null, colIdx = 0, rowPos = 0, leafInVol = 0, placed = false;
+    /* 回行缩进：自然溢出续列列头空 N 字格；显式换列仍传 0（见各 nextCol 调用点）。
+       Math.min 兜底：N 超过 rowNum−1 时续列会被吃空，钳到 rowNum−1 留至少 1 格可用 */
+    var wrapIndent = Math.min(num(t.wrap_indent, 0), m.rowNum - 1);
 
     /* ^注音^ 挂靠用：每一轮循环重置，保证只有「紧挨着的上一个字形」能被注音挂上
        （跨换列、跨换页、跨其他标记都不成立 → 回落为普通字符） */
@@ -661,8 +665,8 @@
       leafInVol++;
       colIdx = 0; rowPos = 0;
     }
-    function nextCol() {
-      colIdx++; rowPos = 0;
+    function nextCol(indent = 0) {
+      colIdx++; rowPos = indent;
       if (colIdx >= nCols) newPage();
     }
     newPage();
@@ -689,7 +693,7 @@
         continue;
       }
       if (tk.t === 'space') {
-        if (rowPos + 1 > m.rowNum) nextCol();
+        if (rowPos + 1 > m.rowNum) nextCol(wrapIndent);
         cur.cols[colIdx].items.push({ type: 'space', row: rowPos, _pos: tk.pos });
         rowPos += 1;
         continue;
@@ -702,14 +706,14 @@
         var ceTxt = String(tk.chars.join('')).replace(/\s+/g, '');
         var ceLen = ceTxt.length;
         var ceAnchor = ceLen > 0 && ceLen <= m.rowNum;
-        if (ceAnchor && rowPos + ceLen > m.rowNum) nextCol();
+        if (ceAnchor && rowPos + ceLen > m.rowNum) nextCol(wrapIndent);
         var ceFill = ceAnchor ? m.rowNum - rowPos - ceLen : 0;
         for (var qf = 0; qf < ceFill; qf++) {
           cur.cols[colIdx].items.push({ type: 'space', row: rowPos, _pos: tk.pos });
           rowPos += 1;
         }
         for (var qc = 0; qc < ceTxt.length; qc++) {
-          if (rowPos + 1 > m.rowNum) nextCol();
+          if (rowPos + 1 > m.rowNum) nextCol(wrapIndent);
           cur.cols[colIdx].items.push({
             type: 'char', c: ceTxt.charAt(qc), kind: 'text', row: rowPos,
             nop: false, rot: false, pMode: String(t.text_comma_mode || 'full'), _pos: tk.pos
@@ -723,7 +727,7 @@
         var bn = String(tk.text).length;
         var bSz = num(t.badge_size, 0) > 0 ? num(t.badge_size, 0) : m.fontSize * 0.72;
         var bspan = Math.max(1, Math.ceil(bSz * (bn + 0.32) / m.cellH - 1e-9));
-        if (rowPos + bspan > m.rowNum) nextCol();
+        if (rowPos + bspan > m.rowNum) nextCol(wrapIndent);
         cur.cols[colIdx].items.push({ type: 'badge', text: tk.text, row: rowPos, span: bspan, _pos: tk.pos });
         rowPos += bspan;
         continue;
@@ -742,7 +746,7 @@
         var rawR = String(tk.raw || '');
         var rLast = null;
         for (var rq = 0; rq < rawR.length; rq++) {
-          if (rowPos + 1 > m.rowNum) nextCol();
+          if (rowPos + 1 > m.rowNum) nextCol(wrapIndent);
           rLast = {
             type: 'char', c: rawR.charAt(rq), kind: 'text',
             row: rowPos, nop: false, rot: false,
@@ -780,8 +784,8 @@
           var sqItems = cur.cols[colIdx].items, tgt = null;
           if (isClose) for (var si2 = sqItems.length - 1; si2 >= 0; si2--)
             if (sqItems[si2].type === 'char') { tgt = sqItems[si2]; break; }
-          if (tgt && (tgt.sqz || []).length < 2) { (tgt.sqz = tgt.sqz || []).push(tk.c); continue; }
-          nextCol();
+            if (tgt && (tgt.sqz || []).length < 2) { (tgt.sqz = tgt.sqz || []).push(tk.c); continue; }
+          nextCol(wrapIndent);
         }
         var citem = {
           type: 'char', c: tk.c, kind: 'text',
@@ -836,7 +840,7 @@
             var abn = String(ac.badge).length;
             var abSz = num(t.badge_size, 0) > 0 ? num(t.badge_size, 0) : m.fontSize * 0.72;
             var abspan = Math.max(1, Math.ceil(abSz * (abn + 0.32) / m.cellH - 1e-9));
-            if (rowPos + abspan > m.rowNum) nextCol();
+            if (rowPos + abspan > m.rowNum) nextCol(wrapIndent);
             cur.cols[colIdx].items.push({ type: 'badge', text: ac.badge, row: rowPos, span: abspan, _pos: (tk.posArr && tk.posArr[ai] != null ? tk.posArr[ai] : tk.pos) });
             rowPos += abspan;
             continue;
@@ -855,7 +859,7 @@
             if (aIsClose) for (var asi2 = asq.length - 1; asi2 >= 0; asi2--)
               if (asq[asi2].type === 'char') { atgt = asq[asi2]; break; }
             if (atgt && (atgt.sqz || []).length < 2) { (atgt.sqz = atgt.sqz || []).push(ac); continue; }
-            nextCol();
+            nextCol(wrapIndent);
           }
           cur.cols[colIdx].items.push({ type: 'char', c: ac, kind: 'text', row: rowPos, nop: anop, rot: arot, pMode: aMode, accent: true, _pos: (tk.posArr && tk.posArr[ai] != null ? tk.posArr[ai] : tk.pos) });
           rowPos += aunit;
@@ -868,7 +872,7 @@
         var posArrC = tk.posArr || [];
         var posOff = 0;                      // 已在前面列排掉的字符数（posArr 随 chars 一起推进）
         while (chars.length > 0) {
-          if (rowPos >= m.rowNum) nextCol();
+          if (rowPos >= m.rowNum) nextCol(wrapIndent);
           /* 有效字符序列（青简 vis）：none 剔除全部标点；hang 仅剔除 nop（、，。类，悬空挂前字
              宽 0 不占计数），rot（「」〔〕（）类）保留计数、正常占格 */
           var vis = [], vmap = [];
@@ -939,7 +943,7 @@
             chars = [];
           } else {                                                 // 放不下 → 截短本列段，余下换列
             /* 列底不足 1 个正文字位（栅格锁下夹注最少占 1 格）→ 整段移下一列，不缩字号硬塞 */
-            if (availRows < 1 - 1e-9) { nextCol(); continue; }
+            if (availRows < 1 - 1e-9) { nextCol(wrapIndent); continue; }
             var fitChars = Math.max(2, 2 * Math.floor(availRows * m.cellH / m.commentCellNorm));
             var k = Math.min(vis.length, fitChars);
             if (k < vis.length && k % 2) k--;
@@ -1052,7 +1056,7 @@
             rowPos += segSpan;
             chars = chars.slice(rawTake);
             posOff += rawTake;                 // 与 chars 同步推进，下一段 posArr 才对齐
-            if (chars.length > 0) nextCol();                       // 还有剩余，换列继续
+            if (chars.length > 0) nextCol(wrapIndent);                       // 还有剩余，换列继续
           }
         }
         continue;

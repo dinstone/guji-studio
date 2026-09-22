@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "0.8.9"
+		"file_version": "0.9.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.8.9",
+			"ProductVersion": "0.9.0",
 			"CompanyName": "dinstone ltd",
 			"FileDescription": "古籍工作室，可视化排版，所见即所得。",
 			"LegalCopyright": "(c) 2026, dinstone@163.com",
