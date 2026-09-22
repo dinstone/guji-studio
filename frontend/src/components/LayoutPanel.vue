@@ -10,6 +10,7 @@ import { matchPaper } from '../core/papersize'
 import {
   tplLib, tplSel, tplParams, loadTemplates,
   applyTemplate, importTplFromBook, renameTpl, deleteTpl, view, proj, bookTitle,
+  tplScope, curUnit, curBlockName,
 } from '../stores/app'
 import { appPrompt, appConfirm } from '../stores/dialog'
 
@@ -113,7 +114,20 @@ const fontRows = computed(() => checkTemplateFonts(params.value))
 /* ---- 库操作 ---- */
 async function doApply() {
   if (!cur.value) return
-  await applyTemplate(cur.value.id)
+  const t = cur.value
+  const isUnit = tplScope.value === 'unit'
+  let msg = `将套用模板「${t.name}」`
+  if (isUnit) {
+    const blk = curUnit()
+    const hasOv = !!(blk?.template && Object.keys(blk.template as Record<string, any>).length)
+    msg += hasOv
+      ? `到单元「${curBlockName()}」。该单元已有自定义版式，套用后将整块替换，且此操作不可撤销。`
+      : `到单元「${curBlockName()}」，此操作不可撤销。`
+  } else {
+    msg += '到当前图书，将覆盖现有版式参数，此操作不可撤销。'
+  }
+  if (!(await appConfirm(msg))) return
+  await applyTemplate(t.id)
 }
 async function doImport() {
   const nm = await appPrompt('把当前图书的版式导入为模板，模板名：', proj.name + ' 版式')
