@@ -93,6 +93,20 @@ export async function openProject(dir: string): Promise<BookProjectFlat> {
 export async function saveProject(dir: string, p: BookProjectFlat): Promise<void> {
   return (ProjectSvc as any).Save(dir, p)
 }
+
+/** 自动保存范围：仅写变更的文件（见 Go SaveScope），避免全量重写。 */
+export interface SaveScope {
+  book: boolean
+  setting: boolean
+  publish: boolean
+  textAll: boolean
+  textIDs: string[]
+  blockAll: boolean
+  blockIDs: string[]
+}
+export async function saveProjectScoped(dir: string, p: BookProjectFlat, scope: SaveScope): Promise<void> {
+  return (ProjectSvc as any).SaveScoped(dir, p, scope)
+}
 export async function ensureNewProject(dir: string, name: string, title: string, template?: Record<string, any>): Promise<void> {
   return (ProjectSvc as any).EnsureNewProject(dir, name, title, template ?? {})
 }

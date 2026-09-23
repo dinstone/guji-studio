@@ -11,7 +11,12 @@ import { LayoutEngine } from '../core/engine'
 import { sysFontsLoad, sysFontsCache } from '../core/fontlist'
 import type { FontInfo } from '../platform/wails'
 
-const props = defineProps<{ modelValue: string }>()
+/* modelValue 允许 undefined：父级用 v-model="tplEdit[it.k]" 时，schema 里尚未初始化的
+ * 'fam' 项会传 undefined，组件内部已按空值处理（display 走占位文案）。声明为可选 + 默认 ''，
+ * 避免 Vue 运行时类型校验报「Expected String, got Undefined」。 */
+const props = withDefaults(defineProps<{ modelValue?: string }>(), {
+  modelValue: '',
+})
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 
 const root = ref<HTMLElement | null>(null)

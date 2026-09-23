@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -44,18 +45,27 @@ func (s *SettingsService) Get() (*AppSettings, error) {
 	st := &AppSettings{}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return st, nil // 首次启动
+		if os.IsNotExist(err) {
+			return st, nil // 首次启动
+		}
+		// 其他读错误（权限等）也回落空，不阻断启动/打开流程。
+		log.Printf("[settings] 读取 %s 失败，回落空设置: %v", path, err)
+		return st, nil
 	}
 	if err := json.Unmarshal(raw, st); err != nil {
-		// 文件损坏（如上次写入被中断）：不阻断启动/打开流程，回落空设置，
-		// 后续 Set 会写出完整内容覆盖修复。与「无文件」行为保持一致。
+		// 文件损坏（如上次写入被中断）：先备份原字节便于人工恢复，再回落空设置。
+		// 不在此直接覆盖——后续 Set 会在原子写时写出完整内容修复。
 		log.Printf("[settings] 解析 %s 失败，回落空设置: %v", path, err)
+		if berr := backupCorrupt(path, raw); berr != nil {
+			log.Printf("[settings] 备份损坏文件失败（不影响运行）: %v", berr)
+		}
 		return st, nil
 	}
 	return st, nil
 }
 
-// Set 保存设置。
+// Set 保存设置（原子写：先写同目录临时文件，再 rename 覆盖，
+// 避免写入中途崩溃/被杀留下半截文件导致下次启动解析失败）。
 func (s *SettingsService) Set(st *AppSettings) error {
 	path, err := settingsPath()
 	if err != nil {
@@ -65,7 +75,47 @@ func (s *SettingsService) Set(st *AppSettings) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(raw, '\n'), 0o644)
+	body := append(raw, '\n')
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".settings-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// backupCorrupt 把损坏的设置原字节另存为 settings.json.corrupt[.N]，便于人工恢复，
+// 不覆盖上一次备份。仅当确实存在损坏内容时调用，权限沿用 0o644。
+func backupCorrupt(path string, raw []byte) error {
+	bak := path + ".corrupt"
+	for i := 1; ; i++ {
+		if _, err := os.Stat(bak); err != nil {
+			if os.IsNotExist(err) {
+				break
+			}
+			return err
+		}
+		bak = fmt.Sprintf("%s.corrupt.%d", path, i)
+	}
+	return os.WriteFile(bak, raw, 0o644)
 }
 
 // SetEditorFontSize 单独设置正文编辑器字号（读-改-写）。

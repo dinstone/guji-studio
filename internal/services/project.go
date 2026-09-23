@@ -788,26 +788,63 @@ func migratePackPatches(dir string, setting *Setting) {
 	// book 是 Open 的局部变量，下次 Save 用 BookProject{} 重建（不含 Pack 字段），旧格式自然消亡
 }
 
-// Save 将完整项目写回文件夹：book.gvs + setting.json + publish.json + 平铺正文。
+// SaveScope 控制 SaveScoped 只写哪些文件，避免全量重写带来的崩溃窗口与无关文件陪写。
+// 自动保存据此只落盘这 3s 内真正变更的文件，避免「改一个 txt 却重写整本书 + book.gvs」。
+// 字段全导出，便于 Wails 跨 JS 边界按 JSON 序列化。
+type SaveScope struct {
+	Book     bool     `json:"book"`     // book.gvs（书级全局：name/meta/template/special）
+	Setting  bool     `json:"setting"`  // setting.json（章引用/卷/块规格/包装三叶 patch）
+	Publish  bool     `json:"publish"`  // publish.json
+	TextAll  bool     `json:"textAll"`  // 写全部正文（手动/整保存用）
+	TextIDs  []string `json:"textIDs"`  // 仅写这些章 id 的正文（自动保存用）
+	BlockAll bool     `json:"blockAll"` // 写全部固定单元文件
+	BlockIDs []string `json:"blockIDs"` // 仅写这些块类型的文件
+}
+
+func (sc SaveScope) needText(id string) bool { return sc.TextAll || contains(sc.TextIDs, id) }
+func (sc SaveScope) needBlock(t string) bool { return sc.BlockAll || contains(sc.BlockIDs, t) }
+func (sc SaveScope) any() bool {
+	return sc.Book || sc.Setting || sc.Publish || sc.TextAll || len(sc.TextIDs) > 0 || sc.BlockAll || len(sc.BlockIDs) > 0
+}
+
+// AllScope 全量保存（手动保存 / 测试走此入口）。
+func AllScope() SaveScope {
+	return SaveScope{Book: true, Setting: true, Publish: true, TextAll: true, BlockAll: true}
+}
+func contains(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// Save 完整保存（全量）：等价于 SaveScoped(AllScope())。测试与手动保存走此入口，签名不变。
 func (s *ProjectService) Save(dir string, p *BookProjectFlat) error {
+	return s.SaveScoped(dir, p, AllScope())
+}
+
+// SaveScoped 只写 SaveScope 指定的文件（其余不动），每个文件走 atomicWriteFile，
+// 崩溃时旧文件在 rename 成功前始终完好——不会留半截、不会毁掉已有内容。
+// 自动保存据此只落盘这 3s 内真正变更的文件，避免「改一个 txt 却重写整本书 + book.gvs」。
+//
+// 一致性保证：文本正文变化不影响 setting.json 的章引用（id/title 不变），故只写 txt 即自洽；
+// 结构变化（增删章/改名/卷/块增删）会同时置 Setting（重写 setting.json + 清理孤儿正文/旧目录），
+// 改名还会把该章 id 纳入 TextIDs（正文以新文件名重写），因此单此保存后盘上状态仍自洽。
+func (s *ProjectService) SaveScoped(dir string, p *BookProjectFlat, scope SaveScope) error {
 	if dir == "" {
 		return fmt.Errorf("未指定项目目录")
 	}
 	if p.Name == "" {
 		return fmt.Errorf("项目名不能为空")
 	}
-	// 目录（text/ guide/ appendix/）一律按需创建：空项目不该在磁盘上留下一堆空文件夹，
-	// 建目录的动作推迟到真正要写文件时（见下）。
-
-	// book.gvs：书级全局（无 pack——包装叶 patch 改放 setting.json.packs）
-	book := BookProject{Name: p.Name, Meta: p.Meta, Template: p.Template, Special: p.Special}
-	if raw, err := json.MarshalIndent(&book, "", "  "); err != nil {
-		return err
-	} else if err := os.WriteFile(filepath.Join(dir, bookFile), append(raw, '\n'), 0o644); err != nil {
-		return fmt.Errorf("写 %s 失败: %w", bookFile, err)
+	if !scope.any() {
+		return nil // 无变更，noop（避免空跑）
 	}
 
-	// 文章池：id 去重 → 按池顺序派生文件名 → 写正文
+	// 共享计算（开销小，且与 scope 无关，保证各文件基于同一份 p 一致）
+	book := BookProject{Name: p.Name, Meta: p.Meta, Template: p.Template, Special: p.Special}
 	usedIDs := map[string]bool{}
 	refs := make([]ChapterRef, 0, len(p.Chapters))
 	for _, c := range p.Chapters {
@@ -822,30 +859,8 @@ func (s *ProjectService) Save(dir string, p *BookProjectFlat) error {
 		refs = append(refs, ChapterRef{ID: id, Title: c.Title})
 	}
 	names := poolFileNames(refs)
-	if len(p.Chapters) > 0 {
-		if err := os.MkdirAll(filepath.Join(dir, textDir), 0o755); err != nil {
-			return fmt.Errorf("创建 %s 目录失败: %w", textDir, err)
-		}
-	}
-	for i, c := range p.Chapters {
-		if err := os.WriteFile(filepath.Join(dir, textDir, names[i]), []byte(c.Text), 0o644); err != nil {
-			return fmt.Errorf("写正文 %s 失败: %w", names[i], err)
-		}
-	}
 
-	// 卷
-	volumes := make([]VolumeSpec, 0, len(p.Volumes))
-	for _, v := range p.Volumes {
-		id := v.ID
-		if id == "" {
-			id = uid()
-		}
-		chaps := append([]string{}, v.Chapters...)
-		volumes = append(volumes, VolumeSpec{ID: id, Title: v.Title, Template: v.Template, Chapters: chaps})
-	}
-
-	// 固定角色单元：存在的写文件并登记 guide/appendix 条目（派生目录只登记条目不写文件），
-	// 缺席的旧文件移入 trash/
+	// 块规格（setting.json 与固定单元文件都依赖）：preface/toc 归 guide，其余归 appendix
 	guideSpecs, appendixSpecs := []BlockSpec{}, []BlockSpec{}
 	have := map[string]bool{}
 	for _, b := range p.Blocks {
@@ -857,57 +872,131 @@ func (s *ProjectService) Save(dir string, p *BookProjectFlat) error {
 			appendixSpecs = append(appendixSpecs, sp)
 		}
 	}
-	for _, def := range fixedBlocks {
-		b := findBlock(p.Blocks, def.Type)
-		// 派生目录不落盘（正文由结构生成）；同时保留磁盘上旧 guide/目录.txt 不动，
-		// 这样「派生 → 手动」切回来还能恢复上次手改的正文。单元被整个删掉时才回收旧文件。
-		if def.Derived && b != nil && derivedOf(b.Derived) {
-			continue
+	volumes := make([]VolumeSpec, 0, len(p.Volumes))
+	for _, v := range p.Volumes {
+		id := v.ID
+		if id == "" {
+			id = uid()
 		}
-		path := filepath.Join(def.Dir, def.File)
-		if have[def.Type] {
-			text := ""
-			if b != nil && b.Chapter != nil {
-				text = b.Chapter.Text
-			}
-			if err := os.MkdirAll(filepath.Join(dir, def.Dir), 0o755); err != nil {
-				return fmt.Errorf("创建 %s 目录失败: %w", def.Dir, err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, path), []byte(text), 0o644); err != nil {
-				return fmt.Errorf("写 %s 失败: %w", path, err)
-			}
-		} else if _, err := os.Stat(filepath.Join(dir, path)); err == nil {
-			moveToTrash(dir, path)
+		chaps := append([]string{}, v.Chapters...)
+		volumes = append(volumes, VolumeSpec{ID: id, Title: v.Title, Template: v.Template, Chapters: chaps})
+	}
+
+	// book.gvs：书级全局（无 pack——包装叶 patch 改放 setting.json.packs）
+	if scope.Book {
+		if raw, err := json.MarshalIndent(&book, "", "  "); err != nil {
+			return err
+		} else if err := atomicWriteFile(filepath.Join(dir, bookFile), append(raw, '\n')); err != nil {
+			return fmt.Errorf("写 %s 失败: %w", bookFile, err)
 		}
 	}
 
-	// publish.json / setting.json：内容为空时不落盘（空项目磁盘上只有 book.gvs，
-	// 结构随编辑逐步长出）。已有旧文件必须删掉——否则"删光所有章/册"后重开会读到幽灵数据。
-	pubRaw, err := json.MarshalIndent(p.Pubs, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := writeOrRemove(dir, publishFile, pubRaw, len(p.Pubs) > 0); err != nil {
-		return err
-	}
-
-	setting := Setting{Chapters: refs, Volumes: volumes, Guide: guideSpecs, Appendix: appendixSpecs, Packs: p.Packs}
-	setRaw, err := json.MarshalIndent(&setting, "", "  ")
-	if err != nil {
-		return err
-	}
-	keepSetting := !settingEmpty(refs, volumes, guideSpecs, appendixSpecs, p.Packs)
-	if err := writeOrRemove(dir, settingFile, setRaw, keepSetting); err != nil {
-		return err
+	// 文章池正文：仅 TextIDs 命中的章（TextAll 则全部）
+	if scope.TextAll || len(scope.TextIDs) > 0 {
+		if len(p.Chapters) > 0 {
+			if err := os.MkdirAll(filepath.Join(dir, textDir), 0o755); err != nil {
+				return fmt.Errorf("创建 %s 目录失败: %w", textDir, err)
+			}
+		}
+		for i, c := range p.Chapters {
+			if !scope.needText(c.ID) {
+				continue
+			}
+			if err := atomicWriteFile(filepath.Join(dir, textDir, names[i]), []byte(c.Text)); err != nil {
+				return fmt.Errorf("写正文 %s 失败: %w", names[i], err)
+			}
+		}
 	}
 
-	// text/ 中不再被引用的 .txt（删章/改名后的孤儿）移入 trash/
-	cleanupTexts(dir, fileSet(names))
-	// 旧版遗留目录移入 trash/
-	for _, d := range legacyDirs {
-		moveToTrash(dir, d)
+	// 固定角色单元文件（preface/toc/guide/appendix）：仅 BlockIDs 命中的类型
+	if scope.BlockAll || len(scope.BlockIDs) > 0 {
+		for _, def := range fixedBlocks {
+			b := findBlock(p.Blocks, def.Type)
+			// 派生目录不落盘（正文由结构生成）；保留磁盘上旧 guide/目录.txt 不动。
+			if def.Derived && b != nil && derivedOf(b.Derived) {
+				continue
+			}
+			if !scope.needBlock(def.Type) {
+				continue
+			}
+			path := filepath.Join(def.Dir, def.File)
+			if have[def.Type] {
+				text := ""
+				if b != nil && b.Chapter != nil {
+					text = b.Chapter.Text
+				}
+				if err := os.MkdirAll(filepath.Join(dir, def.Dir), 0o755); err != nil {
+					return fmt.Errorf("创建 %s 目录失败: %w", def.Dir, err)
+				}
+				if err := atomicWriteFile(filepath.Join(dir, path), []byte(text)); err != nil {
+					return fmt.Errorf("写 %s 失败: %w", path, err)
+				}
+			} else if _, err := os.Stat(filepath.Join(dir, path)); err == nil {
+				moveToTrash(dir, path)
+			}
+		}
+	}
+
+	// publish.json：内容为空时不落盘
+	if scope.Publish {
+		pubRaw, err := json.MarshalIndent(p.Pubs, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := writeOrRemove(dir, publishFile, pubRaw, len(p.Pubs) > 0); err != nil {
+			return err
+		}
+	}
+
+	// setting.json：含章引用/卷/块规格/包装三叶 patch
+	if scope.Setting {
+		setting := Setting{Chapters: refs, Volumes: volumes, Guide: guideSpecs, Appendix: appendixSpecs, Packs: p.Packs}
+		setRaw, err := json.MarshalIndent(&setting, "", "  ")
+		if err != nil {
+			return err
+		}
+		keepSetting := !settingEmpty(refs, volumes, guideSpecs, appendixSpecs, p.Packs)
+		if err := writeOrRemove(dir, settingFile, setRaw, keepSetting); err != nil {
+			return err
+		}
+		// 结构可能变化 → 清理不再被引用的孤儿正文与旧版遗留目录
+		cleanupTexts(dir, fileSet(names))
+		for _, d := range legacyDirs {
+			moveToTrash(dir, d)
+		}
 	}
 	return nil
+}
+
+// atomicWriteFile 原子写：同目录写临时文件 → fsync → chmod 0o644 → rename 覆盖。
+// rename 在同文件系统上是原子的，故崩溃若发生在 rename 之前，原文件始终完好（绝不半截/绝不毁旧内容）。
+// 临时文件以 ".tmp-*-<基名>" 命名，失败路径自行清理。
+func atomicWriteFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".tmp-*-"+filepath.Base(path))
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // rename 成功后文件已不在，Remove 报不存在可忽略；失败则清理
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // writeOrRemove 落盘一个 json：keep=false 时改为删除文件（项目结构为空时不留空壳，
@@ -920,7 +1009,7 @@ func writeOrRemove(dir, file string, raw []byte, keep bool) error {
 		}
 		return nil
 	}
-	if err := os.WriteFile(path, append(raw, '\n'), 0o644); err != nil {
+	if err := atomicWriteFile(path, append(raw, '\n')); err != nil {
 		return fmt.Errorf("写 %s 失败: %w", file, err)
 	}
 	return nil

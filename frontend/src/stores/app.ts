@@ -890,7 +890,7 @@ export function closeUpdate() { updateOpen.value = false }
 export async function flushSave(): Promise<boolean> {
   if (!projectDir.value) return true
   try {
-    await plat.saveProject(projectDir.value, toFlat())
+    await plat.saveProjectScoped(projectDir.value, toFlat(), { book: true, setting: true, publish: true, textAll: true, textIDs: [], blockAll: true, blockIDs: [] })
     markClean()
     lastSavedAt.value = nowClock()
     return true
@@ -1058,6 +1058,7 @@ function applyFlat(f: plat.BookProjectFlat) {
   cur.leaf = 0
   tplScope.value = 'book'
   spScope.value = 'book'
+  initDirtySnapshots() // 载入即「已落盘」基准，后续编辑才被记为变更
 }
 
 function toFlat(): plat.BookProjectFlat {
@@ -1117,7 +1118,7 @@ export async function saveProjectDialog() {
     if (!dir) return
     projectDir.value = dir
   }
-  await plat.saveProject(dir, toFlat())
+  await plat.saveProjectScoped(dir, toFlat(), { book: true, setting: true, publish: true, textAll: true, textIDs: [], blockAll: true, blockIDs: [] })
   markClean()
   lastSavedAt.value = nowClock()
   plat.touchRecent(dir, proj.name).catch(() => {})
@@ -1136,32 +1137,119 @@ export const saveLabel = computed(() => {
   if (saveState.value === 'dirty') return '● 有未保存更改'
   return lastSavedAt.value ? `✓ 已自动保存 ${lastSavedAt.value}` : '✓ 已保存'
 })
-let dirty = false
+/* 细粒度脏标记：记录「哪些文件」变了，自动保存据此只写变更文件（Go 侧每文件原子写）。
+ * 不再像旧实现那样任何改动都全量重写整本书 + 陪写 book.gvs。 */
+interface DirtyState {
+  book: boolean        // book.gvs（name/meta/template/special）
+  setting: boolean     // setting.json（章引用/卷/块规格/包装三叶）
+  publish: boolean     // publish.json
+  texts: Set<string>   // 正文变更的章 id
+  blocks: Set<string>  // 固定单元文件变更的块 type
+}
+let dirty: DirtyState = { book: false, setting: false, publish: false, texts: new Set(), blocks: new Set() }
 let suppressDirty = false
 let lastErrToastAt = 0
+
+// 快照：diff 出「具体哪些章/卷/块」变了，避免每次全量重写。
+let snapChap = new Map<string, string>() // cid -> JSON{text,title}
+let snapVol = new Map<string, string>()  // vid -> JSON{title,template,order}
+let snapBlock = new Map<string, string>() // type -> JSON{text,derived,mode}
 
 function nowClock(): string {
   return new Date().toLocaleTimeString('zh-CN', { hour12: false })
 }
 function markClean() {
-  dirty = false
+  dirty = { book: false, setting: false, publish: false, texts: new Set(), blocks: new Set() }
   saveState.value = 'saved'
 }
+function anyDirty(): boolean {
+  return dirty.book || dirty.setting || dirty.publish || dirty.texts.size > 0 || dirty.blocks.size > 0
+}
+/* 打开/新建项目后把快照重置为「当前已落盘状态」，避免把载入过程当成变更。 */
+function initDirtySnapshots() {
+  snapChap = new Map()
+  snapVol = new Map()
+  snapBlock = new Map()
+  for (const v of proj.tree.scrolls) {
+    snapVol.set(v.id, JSON.stringify({ n: v.name, p: v.template, o: v.chapters.map(c => c.id) }))
+    for (const c of v.chapters) snapChap.set(c.id, JSON.stringify({ x: c.text, t: c.title }))
+  }
+  for (const b of [...proj.tree.guide, ...proj.tree.appendix]) {
+    snapBlock.set(b.type, JSON.stringify({ x: (b.chapters || []).map(c => c.text).join('\n'), d: b.derived, m: b.mode }))
+  }
+}
 
-watch([proj, tpl, bookSpecial], () => {
+function diffScrolls() {
   if (suppressDirty) return
-  dirty = true
-  saveState.value = 'dirty'
-}, { deep: true })
+  const curVol = new Map<string, string>()
+  const curChap = new Map<string, string>()
+  let changed = false
+  for (const v of proj.tree.scrolls) {
+    curVol.set(v.id, JSON.stringify({ n: v.name, p: v.template, o: v.chapters.map(c => c.id) }))
+    for (const c of v.chapters) {
+      curChap.set(c.id, JSON.stringify({ x: c.text, t: c.title }))
+      const prev = snapChap.get(c.id)
+      if (prev === undefined) { changed = true; dirty.texts.add(c.id) } // 新增章
+      else {
+        const pj = JSON.parse(prev) as { x: string; t: string }
+        if (pj.x !== c.text) dirty.texts.add(c.id)
+        if (pj.t !== c.title) { dirty.texts.add(c.id); changed = true } // 改名需以新文件名重写正文
+      }
+    }
+  }
+  for (const id of snapChap.keys()) if (!curChap.has(id)) changed = true // 删章
+  for (const [id, sig] of curVol) {
+    const prev = snapVol.get(id)
+    if (prev === undefined || prev !== sig) changed = true // 卷增/删/改名/改模板/调序
+  }
+  for (const id of snapVol.keys()) if (!curVol.has(id)) changed = true // 删卷
+  snapChap = curChap
+  snapVol = curVol
+  if (changed) dirty.setting = true
+  if (changed || dirty.texts.size > 0) saveState.value = 'dirty'
+}
+
+function diffBlocks() {
+  if (suppressDirty) return
+  const cur = new Map<string, string>()
+  let changed = false
+  for (const b of [...proj.tree.guide, ...proj.tree.appendix]) {
+    const sig = JSON.stringify({ x: (b.chapters || []).map(c => c.text).join('\n'), d: b.derived, m: b.mode })
+    cur.set(b.type, sig)
+    const prev = snapBlock.get(b.type)
+    if (prev === undefined || prev !== sig) { changed = true; dirty.blocks.add(b.type) }
+  }
+  for (const t of snapBlock.keys()) if (!cur.has(t)) { changed = true; dirty.blocks.add(t) } // 移除的块：旧文件移 trash
+  snapBlock = cur
+  if (changed) dirty.setting = true // 块规格（derived/mode）在 setting.json
+  if (changed) saveState.value = 'dirty'
+}
+
+// 书级全局（name/meta/template/special）→ book.gvs
+watch(() => proj.name, () => { if (suppressDirty) return; dirty.book = true; saveState.value = 'dirty' })
+watch(() => proj.meta, () => { if (suppressDirty) return; dirty.book = true; saveState.value = 'dirty' }, { deep: true })
+watch(tpl, () => { if (suppressDirty) return; dirty.book = true; saveState.value = 'dirty' }, { deep: true })
+watch(bookSpecial, () => { if (suppressDirty) return; dirty.book = true; saveState.value = 'dirty' }, { deep: true })
+// 出版 → publish.json
+watch(proj.pubs, () => { if (suppressDirty) return; dirty.publish = true; saveState.value = 'dirty' }, { deep: true })
+// 章/卷结构 + 正文 → 细粒度 diff（只标真正变更的章 id / 结构变化）
+watch(() => proj.tree.scrolls, diffScrolls, { deep: true })
+// 固定单元（序/目录/跋/牌记）→ 细粒度 diff
+watch([() => proj.tree.guide, () => proj.tree.appendix], diffBlocks, { deep: true })
 
 setInterval(async () => {
-  if (!dirty || !projectLoaded.value || !projectDir.value) return
+  if (!anyDirty() || !projectLoaded.value || !projectDir.value) return
+  const scope: plat.SaveScope = {
+    book: dirty.book, setting: dirty.setting, publish: dirty.publish,
+    textAll: false, textIDs: [...dirty.texts],
+    blockAll: false, blockIDs: [...dirty.blocks],
+  }
   try {
-    await plat.saveProject(projectDir.value, toFlat())
+    await plat.saveProjectScoped(projectDir.value, toFlat(), scope)
     markClean()
     lastSavedAt.value = nowClock()
   } catch (err: any) {
-    dirty = true
+    // 保留 dirty：下次 tick 重试；不重置快照（当前状态即待保存状态）
     saveState.value = 'error'
     const now = Date.now()
     if (now - lastErrToastAt > 30_000) {

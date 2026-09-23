@@ -60,40 +60,47 @@ function reportCursor(state: EditorState) {
   setEditorStatus(stat.chars, stat.lines, pos.line, pos.col)
 }
 
+/* 重建编辑器状态用的扩展清单：每次切章都重新创建一份（见 loadChapter），
+ * 因此历史与上一章完全隔离——undo/redo 只作用于「当前章」，不会退回到上一章正文，
+ * 也不会因「整篇替换」被记进历史而被回撤快捷键还原成别的章内容。 */
+function buildExtensions() {
+  return [
+    /* 隐藏标记的删除守卫：退格/删除命中 `【】`/`{}`/`[]` 的一端时，连带配对一起删
+       （= 取消该标记，内容保留），避免只删一端留下落单括号。
+       用 Prec.highest + 排在 basicSetup 之前，保证先于 defaultKeymap 匹配。 */
+    markerGuardKeymap,
+    basicSetup,
+    /* 不挂 `markdown()`：源文是自定义古籍 DSL（`[..]` 强调 / `{..}` 徽标 / `【..】` 夹注 / `#` 章题），
+       与 markdown 语法直接撞车——lezer-markdown 把 `[任意内容]`（无 `(url)` 也算）判为 Link，
+       basicSetup 的 defaultHighlightStyle 给 tags.link / tags.heading 加 `textDecoration: underline`
+       （且不改颜色），于是源码态下 `[]` 包住的段落通体黑下划线、`#` 章题被加粗划线。
+       这些语义由 core/editorDeco.ts 的美化态装饰负责，不需要 markdown 高亮。
+       回归：tools/probe-md-bracket.mjs */
+    EditorView.lineWrapping,
+    beautifyField,
+    decoPlugin,
+    linkHighlightField,
+    roComp.of(EditorState.readOnly.of(!canEdit.value)),
+    EditorView.updateListener.of(u => {
+      if (u.docChanged && !swapping) {
+        const ch = curChapter()
+        if (ch) ch.text = u.state.doc.toString()
+      }
+      if (u.docChanged) restat(u.state.doc.toString())
+      if (u.docChanged || u.selectionSet) reportCursor(u.state)
+      if (u.selectionSet) {
+        const s = u.state.selection.main
+        setEditorSel(s.from, s.to)
+      }
+    }),
+  ]
+}
+
 onMounted(() => {
   cm = new EditorView({
     state: EditorState.create({
       doc: editorDoc.value,
-    extensions: [
-      /* 隐藏标记的删除守卫：退格/删除命中 `【】`/`{}`/`[]` 的一端时，连带配对一起删
-         （= 取消该标记，内容保留），避免只删一端留下落单括号。
-         用 Prec.highest + 排在 basicSetup 之前，保证先于 defaultKeymap 匹配。 */
-      markerGuardKeymap,
-      basicSetup,
-      /* 不挂 `markdown()`：源文是自定义古籍 DSL（`[..]` 强调 / `{..}` 徽标 / `【..】` 夹注 / `#` 章题），
-         与 markdown 语法直接撞车——lezer-markdown 把 `[任意内容]`（无 `(url)` 也算）判为 Link，
-         basicSetup 的 defaultHighlightStyle 给 tags.link / tags.heading 加 `textDecoration: underline`
-         （且不改颜色），于是源码态下 `[]` 包住的段落通体黑下划线、`#` 章题被加粗划线。
-         这些语义由 core/editorDeco.ts 的美化态装饰负责，不需要 markdown 高亮。
-         回归：tools/probe-md-bracket.mjs */
-      EditorView.lineWrapping,
-      beautifyField,
-      decoPlugin,
-      linkHighlightField,
-      roComp.of(EditorState.readOnly.of(!canEdit.value)),
-      EditorView.updateListener.of(u => {
-        if (u.docChanged && !swapping) {
-          const ch = curChapter()
-          if (ch) ch.text = u.state.doc.toString()
-        }
-        if (u.docChanged) restat(u.state.doc.toString())
-        if (u.docChanged || u.selectionSet) reportCursor(u.state)
-        if (u.selectionSet) {
-          const s = u.state.selection.main
-          setEditorSel(s.from, s.to)
-        }
-      }),
-    ],
+      extensions: buildExtensions(),
     }),
     parent: host.value!,
   })
@@ -115,13 +122,25 @@ onMounted(() => {
   })
 })
 
-/* 切单元 / 切章 / 切派生状态：整体替换文档 */
-watch(docKey, () => {
+/* 切单元 / 切章 / 切派生状态：整状态重建。
+ * 用 cm.setState 重建 EditorState（而非「整篇替换」dispatch），这样新章拿到一份
+ * 全新的 undo/redo 历史——旧章的编辑记录不会跟着过来，回撤/前进只在当前章内生效，
+ * 不会再出现「回撤回退到上一章正文、前进又没反应」的串味。
+ * 重建会清空 beautifyField（初始恒为美化态），故随后把当前美化开关重新 apply 回去。 */
+function loadChapter() {
   if (!cm) return
   swapping = true
-  cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: editorDoc.value } })
+  cm.setState(EditorState.create({
+    doc: editorDoc.value,
+    extensions: buildExtensions(),
+  }))
   swapping = false
-})
+  cm.dispatch({ effects: [setBeautify.of(beautify.value)] })
+  restat(cm.state.doc.toString())
+  reportCursor(cm.state)
+}
+
+watch(docKey, loadChapter)
 
 /* 无可写正文对象（未选章 / 派生目录）：编辑器置只读，避免空白区还能点进去输入 */
 watch(canEdit, v => {
