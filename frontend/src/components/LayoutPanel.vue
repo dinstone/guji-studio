@@ -98,7 +98,7 @@ const rows = computed(() => {
     ['页边距', `上 ${p.margins_top} · 下 ${p.margins_bottom} · 左 ${p.margins_left} · 右 ${p.margins_right}`],
     ['版框', `外线 ${p.outline_width} · 内线 ${p.inline_width}${p.if_vline ? ' · 界行竖线' : ''}`],
     ['行列', `每半叶 ${p.leaf_col} 列 × 每列 ${p.row_num} 字`],
-    ['中缝 / 书口', `中缝 ${p.leaf_center_width}px · ${SEAM_LB[String(p.if_seam)] || '—'}`],
+    ['版界 / 中缝', `版界 ${p.leaf_center_width}px · ${SEAM_LB[String(p.if_seam)] || '—'}`],
     ['鱼尾', `${FISH_LB[String(p.fish_mode)] || '—'} · ${SHAPE_LB[String(p.fish_shape)] || '—'}`],
     ['正文字号', p.text_size_auto ? `自动 · 字距 ${p.text_ydis}×` : `${p.text_font1_size}px`],
     ['字体', `正文 ${FAM_LB[p.text_font_family] || p.text_font_family} · 夹注 ${FAM_LB[p.comment_font_family] || p.comment_font_family}`],

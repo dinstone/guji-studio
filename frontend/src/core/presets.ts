@@ -136,9 +136,9 @@ export function stripContent(p: Record<string, any>): Record<string, any> {
 }
 
 const FISH_LB: Record<string, string> = { none: '无鱼尾', single: '单鱼尾', double: '双鱼尾' }
-const SEAM_LB: Record<string, string> = { none: '无书口', single: '单象鼻', double: '双象鼻' }
+const SEAM_LB: Record<string, string> = { none: '无中缝', single: '单象鼻', double: '双象鼻' }
 
-/** 一行摘要：纸幅 · 行列 · 鱼尾 · 书口（与 Go 侧 digest 口径一致） */
+/** 一行摘要：纸幅 · 行列 · 鱼尾 · 中缝（与 Go 侧 digest 口径一致） */
 export function summarize(p: Record<string, any>): string {
   if (!p || !p.canvas_width) return ''
   const parts = [

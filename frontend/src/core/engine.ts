@@ -1,7 +1,7 @@
 /* ==========================================================================
  * GujiStudio engine · 古籍版式计算引擎
  * 纯函数、无 DOM 依赖，可直接被 Vue / Node 复用
- * 计算链：纸张 -> 页边距 -> 版框(内外框) -> 版心(中缝/列) -> 行线 -> 字号
+ * 计算链：纸张 -> 页边距 -> 版框(内外框) -> 版心(版界/列) -> 行线 -> 字号
  * 由原型期 vrain engine 迁入，逻辑与 tools 验证套件保持一致
  * ========================================================================== */
 // @ts-nocheck — 原型期纯 JS 迁入，暂不做全量类型化；UI 迁移期逐步补接口类型
@@ -126,12 +126,13 @@
     inline_width: 1, inline_color: '#1a1a1a',
     outline_hmargin: 6, outline_vmargin: 6,
     if_vline: 1, vline_width: 1, vline_color: '#1a1a1a',
-    /* 版心 / 中缝 */
+    /* 版心 / 版界 */
     leaf_col: 16, leaf_center_width: 150,
     fish_line_color: '#1a1a1a', fish_line_width: 2, fish_line_margin: 4,
-    /* 书口：象鼻（中缝中线竖线）+ 上/下书口横线（位置随分割线 Y），与鱼尾开关无关 */
-    if_seam: 'double',         // 书口样式：none（无）| single（单象鼻）| double（双象鼻）
+    /* 中缝 = 版心中轴竖线（象鼻），与「上/下分割线（横线）」是两个概念：横线垂直于中缝、由分割线组独立设色 */
+    if_seam: 'double',         // 中缝样式：none（无）| single（单象鼻）| double（双象鼻）
     seam_color: '#1a1a1a', seam_width: 2,
+    seam_top_color: '#1a1a1a', seam_btm_color: '#1a1a1a',   // 上/下横线（分割线）色，独立于中缝竖线色
     seam_top_linewidth: 18, seam_btm_linewidth: 18,
     /* 鱼尾 */
     fish_mode: 'double',       // none | single | double
@@ -219,12 +220,12 @@
     ruby_bias: 0.3,
     ruby_font_family: 'ruby_serif',
     ruby_color: '',            // 空 = 跟随正文颜色
-    /* 版心堂号：中缝上的图片素材（与鱼尾/书名/页码并列，src 空 = 不输出）。
-       只用「内容区高度比例 + 中缝宽比例」两个锚点，两者都是 computeMetrics 算出的
+    /* 版心堂号：版界上的图片素材（与鱼尾/书名/页码并列，src 空 = 不输出）。
+       只用「内容区高度比例 + 版界宽比例」两个锚点，两者都是 computeMetrics 算出的
        计算值 → 换纸张 / 改边距自动跟随，不需要绝对像素，也就不需要「自动档」开关。 */
     seam_stamp_src: '',
     seam_stamp_pos: 0.5,       // 0 = 内容区顶，1 = 内容区底
-    seam_stamp_w: 0.6,         // 占中缝宽的比例（中缝窄的模板自动缩小）
+    seam_stamp_w: 0.6,         // 占版界宽的比例（版界窄的模板自动缩小）
     seam_stamp_opacity: 0.9,
     /* 叶面水印：图片素材压在版框与文字之下（src 空 = 不输出）。
        x / y = 图心在纸张上的比例位置，w = 占纸张宽的比例（高按原图比推导）。 */
@@ -332,7 +333,7 @@
   /* ------------------------------------------------------- 1. 版式度量计算 */
   /**
    * 由模板参数推导全部几何量
-   * 纸张 -> 页边距 -> 版框 -> 内容区 -> 中缝 -> 半叶 -> 列宽 -> 行线 -> 字号
+   * 纸张 -> 页边距 -> 版框 -> 内容区 -> 版界 -> 半叶 -> 列宽 -> 行线 -> 字号
    */
   function computeMetrics(t) {
     var W = num(t.canvas_width, 2480), H = num(t.canvas_height, 1860);
@@ -355,7 +356,7 @@
     content.w = content.x1 - content.x0;
     content.h = content.y1 - content.y0;
 
-    // 中缝（版心）水平居中
+    // 版界（版心）水平居中
     var centerW = Math.max(0, Math.min(num(t.leaf_center_width, 0), content.w * 0.6));
     var centerX = content.x0 + content.w / 2;
 
@@ -403,7 +404,7 @@
        仍按原字号算，避免 chapterPerCol / 夹注块高变化引起分页漂移。 */
     var rubyK = 1, rubySize = 0;
     var rubyOn = rubyActive(t) ? 1 : 0;
-    if (rubyOn && t.text_size_auto) {
+    if (rubyOn) {
       var rRatio = Math.max(0.05, Math.min(1, num(t.ruby_size_ratio, 0.18)));
       var rGap = Math.max(0, num(t.ruby_gap, 2));
       var fsFit = (cellH - rGap) / (RUBY_RUBY_RUBY_INK_HZ + RUBY_BOX * rRatio);
@@ -736,7 +737,7 @@
         /* 注音挂「前一个字」：仅当紧邻的上一个 token 是普通正文汉字才成立
            （标点、已有注音的重复标记、句首都不接收）→ 否则把 ^…^ 原样退回普通字符，
            让用户看得见自己输入了什么，不静默吞掉。
-           `m.rubySize > 0` 是「本模板能排出注音」的前提（注音关闭 / 固定字号模板下为 0）——
+           `m.rubySize > 0` 是「本模板能排出注音」的前提（注音关闭时为 0）——
            排不出时同样回落为普通字符，绝不静默吃掉。 */
         if (m.rubySize > 0 && rubyAnchor && !rubyAnchor.nop && !rubyAnchor.rot && !rubyAnchor.ruby) {
           rubyAnchor.ruby = tk.text;
@@ -1079,8 +1080,8 @@
     return { metrics: m, pages: pages, stats: stats };
   }
 
-  /* --------------------------------------------- 4. 书口（象鼻）与鱼尾几何 */
-  /** 书口样式归一化：none | single（单象鼻）| double（双象鼻）
+  /* --------------------------------------------- 4. 中缝（象鼻）与鱼尾几何 */
+  /** 中缝样式归一化：none | single（单象鼻）| double（双象鼻）
    *  旧值兼容：on/auto 归并为 double，off 归并为 none */
   function seamMode(t) {
     var sm = String(t.if_seam === undefined ? 'double' : t.if_seam);
@@ -1089,26 +1090,28 @@
     return 'double';
   }
 
-  /** 鱼身与书口横线之间的悬挂间隙（px）：由 fish_line_margin 控制，默认 4 */
+  /** 鱼身与横线（分割线）之间的悬挂间隙（px）：由 fish_line_margin 控制，默认 4 */
   function seamGap(t) { return num(t.fish_line_margin, 4); }
 
   /**
-   * 书口 = 象鼻（中缝中线竖线）+ 书口横线（宽贯中缝）
-   * 位置基准为上/下分割线 Y（fish_top_y / fish_btm_y），与鱼尾开关完全无关：
-   *   · 单象鼻 → 上横线 + 上象鼻[版心顶, 上分割线 Y]
-   *   · 双象鼻 → 再 + 下横线 + 下象鼻[下分割线 Y, 版心底]
-   * 象鼻只画在横线外侧，两横线之间的中缝留给书名/卷次/页码，不通高版心。
+   * 中缝 = 版心中轴竖线（象鼻）；单/双象鼻 = 单/双竖线，由 if_seam 控制。
+   * 横线（上/下分割线）= 水平线，垂直于中缝，把版心切成上·中·下三段、决定上/下鱼尾位置，
+   *   由「分割线」组单独设色与线宽，**显示完全独立于中缝竖线开关**：seamGeom 先算 bars 再按 if_seam 算竖线。
+   * 位置基准 = 上/下分割线 Y（fish_top_y / fish_btm_y），与鱼尾开关完全无关。
    */
   function seamGeom(t, m) {
-    var y0 = m.content.y0, y1 = m.content.y1;
+    /* 竖线纵向贯通到外边框（中缝 = 链接上下横线到外边框）：上端 = 外框顶，下端 = 外框底 */
+    var y0 = m.frame.y, y1 = m.frame.y + m.frame.h;
     var mode = seamMode(t), color = t.seam_color || '#1a1a1a';
     var topY = t.fish_auto ? (y0 + num(t.fish_top_pad, 100)) : num(t.fish_top_y, y0 + 100);
     var btmY = t.fish_auto ? (y1 - num(t.fish_btm_pad, 200)) : num(t.fish_btm_y, y1 - 200);
     var out = { mode: mode, color: color, topY: topY, btmY: btmY, bars: [], segs: [] };
-    if (mode === 'none') return out;
+    /* 横线（分割线）：独立于中缝竖线开关，仅由各自线宽 >0 决定显示，与 if_seam 无关 */
     var tLw = num(t.seam_top_linewidth, 0), bLw = num(t.seam_btm_linewidth, 0);
-    if (tLw > 0) out.bars.push({ y: topY, lw: tLw, color: color });
-    if (mode === 'double' && bLw > 0) out.bars.push({ y: btmY, lw: bLw, color: color });
+    if (tLw > 0) out.bars.push({ y: topY, lw: tLw, color: t.seam_top_color || color });
+    if (bLw > 0) out.bars.push({ y: btmY, lw: bLw, color: t.seam_btm_color || color });
+    /* 中缝竖线（象鼻）：单/双象鼻 = 单/双竖线，仅在 if_seam !== none 时绘制 */
+    if (mode === 'none') return out;
     function seg(a, b) { a = Math.max(a, y0); b = Math.min(b, y1); if (b - a > 0.01) out.segs.push({ y0: a, y1: b }); }
     seg(y0, topY);
     if (mode === 'double') seg(btmY, y1);
@@ -1118,12 +1121,12 @@
   /**
    * 鱼尾 = 单块五边形（vRain 口径）+ 花饰（自身不带横线）
    * 宽边贴基线，自尾侧向内挖 V 口：两瓣垂/翘 d1+d2，凹口底仅 d1（d1=鱼身高，d2=鱼尾高；
-   * d1=0 时退化为实心三角）。位置基准为上/下分割线 Y，若该处存在书口横线，则空 SEAM_GAP 紧贴。
-   * 下鱼尾默认对鱼尾（direction=1）：底边贴下书口横线，两瓣翘上、凹口朝下；
-   * direction=0 为顺鱼尾：与上鱼尾同形，悬挂于下书口横线之下。
+   * d1=0 时退化为实心三角）。位置基准为上/下分割线 Y，若该处存在横线（分割线），则空 SEAM_GAP 紧贴。
+   * 下鱼尾默认对鱼尾（direction=1）：底边贴下横线（分割线），两瓣翘上、凹口朝下；
+   * direction=0 为顺鱼尾：与上鱼尾同形，悬挂于下横线（分割线）之下。
    */
   function fishGeom(t, m) {
-    var cx = m.centerX, hw = Math.max(4, m.centerW) / 2;   // 鱼尾宽 = 中缝宽
+    var cx = m.centerX, hw = Math.max(4, m.centerW) / 2;   // 鱼尾宽 = 版界宽
     var x0 = cx - hw, x1 = cx + hw;
     var shape = t.fish_shape, parts = [];
 
@@ -1164,7 +1167,7 @@
     var mode = t.fish_mode === 'centerline' ? 'none' : t.fish_mode;   // 兼容旧值：中心线并入「无」
     var sg = seamGeom(t, m);
 
-    /* 书口：象鼻竖线 + 书口横线（与鱼尾样式互不依赖） */
+    /* 中缝竖线（象鼻）+ 上/下横线（分割线，颜色独立）；与鱼尾样式互不依赖 */
     var sw = num(t.seam_width, 2);
     if (sg.mode !== 'none' && sw > 0) {
       out.seam = { color: sg.color, width: sw, y0: m.content.y0, y1: m.content.y1, segs: sg.segs };
@@ -1199,7 +1202,7 @@
     }
 
     if (mode !== 'none') {
-      // 上鱼尾：五边形宽边贴上书口横线下侧、两瓣垂下（凹口朝下）
+      // 上鱼尾：五边形宽边贴上横线（分割线）下侧、两瓣垂下（凹口朝下）
       var aT = anchorBelow(sg.topY);
       var tRect = num(t.fish_top_rectheight, 0), tTri = num(t.fish_top_triaheight, 0);
       out.top = {
@@ -1220,7 +1223,7 @@
         decorFor(t.fish_btm_color, bLow - bRect, bRect);
       }
       if (mode === 'triple') {
-        // 中鱼尾：内容区中部，无书口横线；方向可翻（默认朝下=同上鱼尾），位置用内容区高度比例
+        // 中鱼尾：内容区中部，无横线（分割线）；方向可翻（默认朝下=同上鱼尾），位置用内容区高度比例
         var mY = m.content.y0 + m.content.h * clamp01(num(t.fish_mid_pos, 0.5), 0, 1);
         var mDir = num(t.fish_mid_direction, 0) === 1 ? 'up' : 'down';
         var mRect = num(t.fish_mid_rectheight, 0), mTri = num(t.fish_mid_triaheight, 0);
@@ -1847,9 +1850,21 @@
     if (num(t.outline_width, 0) > 0)
       o.push('<rect x="' + f(fr.x) + '" y="' + f(fr.y) + '" width="' + f(fr.w) + '" height="' + f(fr.h) +
         '" fill="none" stroke="' + t.outline_color + '" stroke-width="' + f(num(t.outline_width, 0)) + '"/>');
-    if (num(t.inline_width, 0) > 0)
-      o.push('<rect x="' + f(ct.x0) + '" y="' + f(ct.y0) + '" width="' + f(ct.w) + '" height="' + f(ct.h) +
-        '" fill="none" stroke="' + t.inline_color + '" stroke-width="' + f(num(t.inline_width, 0)) + '"/>');
+    if (num(t.inline_width, 0) > 0) {
+      if (m.centerW > 0) {
+        /* 内框线不穿过版界/中缝（与辅助线同口径：上下边在版界两侧分段，左右边贯通） */
+        var ilb = m.centerX - m.centerW / 2, irb = m.centerX + m.centerW / 2;
+        o.push('<path class="v-inline" fill="none" stroke="' + t.inline_color + '" stroke-width="' + f(num(t.inline_width, 0)) + '" d="' +
+          'M' + f(ct.x0) + ' ' + f(ct.y0) + 'H' + f(ilb) +
+          'M' + f(irb) + ' ' + f(ct.y0) + 'H' + f(ct.x1) +
+          'M' + f(ct.x0) + ' ' + f(ct.y1) + 'H' + f(ilb) +
+          'M' + f(irb) + ' ' + f(ct.y1) + 'H' + f(ct.x1) +
+          'M' + f(ct.x0) + ' ' + f(ct.y0) + 'V' + f(ct.y1) +
+          'M' + f(ct.x1) + ' ' + f(ct.y0) + 'V' + f(ct.y1) + '"/>');
+      } else
+        o.push('<rect x="' + f(ct.x0) + '" y="' + f(ct.y0) + '" width="' + f(ct.w) + '" height="' + f(ct.h) +
+          '" fill="none" stroke="' + t.inline_color + '" stroke-width="' + f(num(t.inline_width, 0)) + '"/>');
+    }
 
     /* 界行：列与列之间的竖线，贯通内容区（与边框、中缝重合处不重画） */
     if (t.if_vline && num(t.vline_width, 0) > 0 && m.cols > 1) {
@@ -1865,7 +1880,7 @@
       o.push(vl.join(''));
     }
 
-    /* 版心界行竖线（中缝两侧）：内缩去掉，紧贴中缝边缘 → 版心界行 = 中缝宽 */
+    /* 版界竖线（版界两侧）：内缩去掉，紧贴版界边缘 → 两线间距 = 版界宽 */
     if (m.centerW > 0 && num(t.fish_line_width, 0) > 0) {
       var lx = m.centerX - m.centerW / 2, rx2 = m.centerX + m.centerW / 2;
       o.push('<line class="v-cl" x1="' + f(lx) + '" y1="' + f(ct.y0) + '" x2="' + f(lx) + '" y2="' + f(ct.y1) +
@@ -1876,7 +1891,7 @@
     /* 鱼尾 */
     var g = fishGeom(t, m);
     var halfC = m.centerW / 2;
-    /* 书口：象鼻竖线（仅横线外侧分段，不通高版心）+ 书口横线（宽贯中缝，位置随分割线 Y）；
+    /* 中缝竖线（象鼻，由 if_seam 控制）+ 上/下横线（分割线，独立于中缝开关、宽贯版界、位置随分割线 Y、颜色独立）；
        画在鱼尾之前，鱼身与版心文字压其上 */
     if (g.seam && g.seam.segs) for (i = 0; i < g.seam.segs.length; i++) {
       var ss = g.seam.segs[i];
@@ -1921,7 +1936,7 @@
       }
     }
 
-    /* 版心文字：页码 + 书名 + 卷次（书口线加粗到接近字号时自动转阴文反白） */
+    /* 版心文字：页码 + 书名 + 卷次（中缝线加粗到接近字号时自动转阴文反白） */
     if (page) {
       function seamFill(fs) {
         return (g.seam && g.seam.width >= fs * 0.8) ? t.canvas_color : null;
@@ -2014,8 +2029,8 @@
       dim(m.W / 2, 0, m.W / 2, fr.y, '上 ' + Math.round(mt(t)), m.W / 2 + 150, fr.y / 2);
       // 左页边距
       dim(0, m.H / 2, fr.x, m.H / 2, 'L' + Math.round(ml(t)), fr.x / 2, m.H / 2 - 60);
-      // 中缝宽
-      dim(m.centerX - m.centerW / 2, ct.y0 - 70, m.centerX + m.centerW / 2, ct.y0 - 70, '中缝 ' + Math.round(m.centerW), m.centerX, ct.y0 - 110);
+      // 版界宽
+      dim(m.centerX - m.centerW / 2, ct.y0 - 70, m.centerX + m.centerW / 2, ct.y0 - 70, '版界 ' + Math.round(m.centerW), m.centerX, ct.y0 - 110);
       // 半叶宽 + 列宽
       var ry = ct.y1 + 60;
       dim(m.centerX + m.centerW / 2, ry, ct.x1, ry, '半叶 ' + Math.round(m.halfW), (m.centerX + m.centerW / 2 + ct.x1) / 2, ry + 55);

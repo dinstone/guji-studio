@@ -159,7 +159,7 @@ const paperHint = computed(() => {
       <section v-for="c in CLUSTERS" :key="c.id" class="cluster" :data-cid="c.id">
         <details :open="clusterOpen(c)" class="clu">
           <summary @click.prevent="open[c.id] = !open[c.id]">
-            <span class="ct">{{ c.title }}</span><span class="csub">{{ c.sub }}</span>
+            <span class="ct">{{ c.title }}</span>
           </summary>
           <div class="cbody">
             <details v-for="g in c.groups" :key="g.id" :open="groupOpen(g)" class="grp">
@@ -278,7 +278,6 @@ const paperHint = computed(() => {
 .clu { border: 0.5px solid #c9c6b8; border-radius: 7px; background: #f3f1ea; overflow: hidden; }
 .clu > summary { padding: 6px 9px; font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none; color: #3a3a35; display: flex; align-items: baseline; gap: 7px; }
 .clu > summary .ct { letter-spacing: 0.5px; }
-.clu > summary .csub { font-size: 10px; font-weight: 400; color: #8a877c; }
 .cbody { padding: 4px 4px 2px; }
 .cbody .grp:last-child { margin-bottom: 1px; }
 .grp { margin-bottom: 4px; border: 0.5px solid #e3e1d7; border-radius: 6px; background: #fff; }

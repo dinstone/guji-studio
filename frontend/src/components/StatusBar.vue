@@ -41,7 +41,7 @@ import { groupNum } from '../core/textstat'
       <div class="row">
         <span>内容区 <b>{{ previewLayout.contentW }}<small>×</small>{{ previewLayout.contentH }}</b></span>
         <span class="dot">·</span>
-        <span>中缝 <b>{{ previewLayout.gutter }}</b></span>
+        <span>版界 <b>{{ previewLayout.gutter }}</b></span>
         <span class="dot">·</span>
         <span>每半叶 <b>{{ previewLayout.cols }} 列 × {{ previewLayout.rows }} 字</b></span>
         <span class="dot">·</span>

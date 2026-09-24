@@ -30,7 +30,7 @@ export interface SchemaItem {
   link?: string; onval?: string
 }
 export interface SchemaGroup { id: string; title: string; open: number; items: SchemaItem[] }
-export interface SchemaCluster { id: string; title: string; sub: string; open: number; groups: SchemaGroup[] }
+export interface SchemaCluster { id: string; title: string; open: number; groups: SchemaGroup[] }
 
 /* ---------------- 分组（扁平，key 唯一） ---------------- */
 
@@ -47,9 +47,9 @@ const gPaper: SchemaGroup = { id: 'paper', title: '纸张设置', open: 1, items
   { k: 'canvas_background_image', lb: '底图', type: 'text', ph: '留空=纯色；填图片路径/dataURL=拉伸铺满纸张' },
 ]}
 
-/* 二·版框：列数 + 外框(粗线) + 内框(细线) + 界行（列数自「版心与中缝」迁入） */
+/* 二·版框：列数 + 外框(粗线) + 内框(细线) + 界行（列数自「版心与版界」迁入） */
 const gFrame: SchemaGroup = { id: 'frame', title: '版框（列数 · 边框 · 界行）', open: 1, items: [
-  { k: 'leaf_col', lb: '半叶列数', type: 'num', min: 1, max: 40, step: 1, unit: '列', tip: '列数决定字格横向排布，与「版心中缝」共同定位版心；现置于版框组，因它直接约束内容区列划分' },
+  { k: 'leaf_col', lb: '半叶列数', type: 'num', min: 1, max: 40, step: 1, unit: '列', tip: '列数决定字格横向排布，与「版界」共同定位版心；现置于版框组，因它直接约束内容区列划分' },
   { k: 'outline_width', lb: '外框线宽', type: 'num', min: 0, max: 40, step: 1, unit: 'px' },
   { k: 'outline_color', lb: '外框线色', type: 'color' },
   { k: 'inline_width', lb: '内框线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
@@ -61,25 +61,40 @@ const gFrame: SchemaGroup = { id: 'frame', title: '版框（列数 · 边框 · 
   { k: 'vline_color', lb: '界行线色', type: 'color', show: s => !!s.if_vline },
 ]}
 
-/* 三·版心中缝：中缝宽/界行线 + 书口(象鼻) + 鱼尾 —— 同一条中缝竖条上的东西归到一起 */
-const gLeafSeam: SchemaGroup = { id: 'leafseam', title: '版心中缝（中缝 · 书口 · 鱼尾）', open: 1, items: [
-  { k: 'leaf_center_width', lb: '中缝宽', type: 'num', min: 0, max: 600, step: 5, unit: 'px', tip: '中缝宽同时决定版心界行间距与鱼尾宽' },
-  { k: 'fish_line_width', lb: '版心界行线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
-  { k: 'fish_line_color', lb: '版心界行线色', type: 'color' },
-  { k: 'if_seam', lb: '书口样式', type: 'sel', opts: [['none', '无'], ['single', '单象鼻'], ['double', '双象鼻']], tip: '象鼻 = 中缝中线竖线；横线宽贯中缝，两横线之间留给书名/卷次/页码' },
-  { k: 'seam_width', lb: '象鼻线宽', type: 'num', min: 0, max: 120, step: 1, unit: 'px', show: s => s.if_seam !== 'none' },
-  { k: 'seam_color', lb: '书口线色', type: 'color', show: s => s.if_seam !== 'none' },
+/* 三·版心样式：按「版界(版心边界) / 中缝(竖线·象鼻) / 分割线(横线) / 鱼尾」四个独立概念拆分，互不混淆 */
+const gLeafBorder: SchemaGroup = { id: 'leafborder', title: '版界（版心边界）', open: 1, items: [
+  { k: 'leaf_center_width', lb: '版界宽', type: 'num', min: 0, max: 600, step: 5, unit: 'px', tip: '版界宽同时决定版界线间距与鱼尾宽' },
+  { k: 'fish_line_width', lb: '版界线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
+  { k: 'fish_line_color', lb: '版界线色', type: 'color' },
+]}
+
+/* 中缝 = 版心中轴竖线（象鼻）；单/双象鼻 = 单/双竖线，由 if_seam 控制。横线（分割线）不在此处，见 gDivider 组 */
+const gSeam: SchemaGroup = { id: 'seam', title: '中缝（版心中轴竖线 · 象鼻）', open: 1, items: [
+  { k: 'if_seam', lb: '中缝样式', type: 'sel', opts: [['none', '无'], ['single', '单象鼻'], ['double', '双象鼻']], tip: '中缝 = 版心中轴竖线（象鼻）；单/双象鼻 = 单/双竖线。横线（上/下分割线）垂直于中缝、在「分割线」组单独设色，与此处无关' },
+  { k: 'seam_width', lb: '中缝线宽', type: 'num', min: 0, max: 120, step: 1, unit: 'px', show: s => s.if_seam !== 'none' },
+  { k: 'seam_color', lb: '中缝线色', type: 'color', show: s => s.if_seam !== 'none' },
+]}
+
+/* 分割线 = 分割版心的上/下横线（水平、垂直于中缝线），把版心切成上·中·下三段、决定上/下鱼尾位置；
+   显示完全独立于中缝竖线开关（if_seam），仅由各自线宽 >0 决定 */
+const gDivider: SchemaGroup = { id: 'divider', title: '分割线（分割版心的上/下横线 · 决定鱼尾位置）', open: 1, items: [
   { k: 'fish_auto', lb: '分割线 Y 自动', type: 'bool', tip: '随内框定位：上分割线 = 上内框 + 留白，下分割线 = 下内框 − 留白，换纸张高度不错位。取消勾选后可手填 Y' },
   { k: 'fish_top_pad', lb: '上分割线留白', type: 'num', min: 0, max: 1000, step: 10, unit: 'px', show: s => !!s.fish_auto },
   { k: 'fish_top_y', lb: '上分割线 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.fish_auto },
-  { k: 'seam_top_linewidth', lb: '上横线宽', type: 'num', min: 0, max: 60, step: 1, unit: 'px', show: s => s.if_seam !== 'none' },
-  { k: 'fish_line_margin', lb: '象鼻横线与鱼身间隙', type: 'num', min: 0, max: 50, step: 1, unit: 'px', tip: '书口横线（象鼻）与鱼身之间的悬挂间隙' },
-  { k: 'fish_btm_pad', lb: '下分割线留白', type: 'num', min: 0, max: 1000, step: 10, unit: 'px', show: s => !!s.fish_auto && (s.if_seam === 'double' || s.fish_mode === 'double' || s.fish_mode === 'triple') },
-  { k: 'fish_btm_y', lb: '下分割线 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.fish_auto && (s.if_seam === 'double' || s.fish_mode === 'double' || s.fish_mode === 'triple') },
-  { k: 'seam_btm_linewidth', lb: '下横线宽', type: 'num', min: 0, max: 60, step: 1, unit: 'px', show: s => s.if_seam === 'double' },
+  { k: 'seam_top_linewidth', lb: '上横线宽', type: 'num', min: 0, max: 60, step: 1, unit: 'px' },
+  { k: 'seam_top_color', lb: '上横线色', type: 'color' },
+  { k: 'fish_btm_pad', lb: '下分割线留白', type: 'num', min: 0, max: 1000, step: 10, unit: 'px', show: s => !!s.fish_auto },
+  { k: 'fish_btm_y', lb: '下分割线 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.fish_auto },
+  { k: 'seam_btm_linewidth', lb: '下横线宽', type: 'num', min: 0, max: 60, step: 1, unit: 'px' },
+  { k: 'seam_btm_color', lb: '下横线色', type: 'color' },
+]}
+
+/* 鱼尾：锚定在上/下分割线处，与中缝/横线互不依赖 */
+const gFish: SchemaGroup = { id: 'fish', title: '鱼尾（锚定分割线）', open: 1, items: [
   { k: 'fish_mode', lb: '鱼尾样式', type: 'sel', opts: [['none', '无'], ['single', '单鱼尾'], ['double', '双鱼尾'], ['triple', '三鱼尾']], tip: '三鱼尾 = 上(尖朝下) + 中(可调方向/位置) + 下(固定尖朝上)；双鱼尾下鱼尾固定尖朝上，方向不可调' },
-  { k: 'fish_shape', lb: '鱼尾形状', type: 'sel', opts: [['triangle', '三角'], ['arc', '弧形'], ['flower', '花瓣']] },
-  { k: 'fish_decor', lb: '鱼尾花饰', type: 'bool' },
+  { k: 'fish_line_margin', lb: '横线与鱼身间隙', type: 'num', min: 0, max: 50, step: 1, unit: 'px', show: s => s.fish_mode !== 'none', tip: '上/下横线（分割线）与鱼身之间的悬挂间隙；鱼尾样式=无 时隐藏' },
+  { k: 'fish_shape', lb: '鱼尾形状', type: 'sel', opts: [['triangle', '三角'], ['arc', '弧形'], ['flower', '花瓣']], show: s => s.fish_mode !== 'none' },
+  { k: 'fish_decor', lb: '鱼尾花饰', type: 'bool', show: s => s.fish_mode !== 'none' },
   { k: 'fish_top_rectheight', lb: '上鱼身高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode !== 'none' },
   { k: 'fish_top_triaheight', lb: '上鱼尾高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode !== 'none' },
   { k: 'fish_top_color', lb: '上鱼尾色', type: 'color', show: s => s.fish_mode !== 'none' },
@@ -240,17 +255,17 @@ const gPunc: SchemaGroup = { id: 'punc', title: '标点处理（正文 · 夹注
 ]}
 
 /* 十三·版心堂号 */
-const gSeamStamp: SchemaGroup = { id: 'seamstamp', title: '版心堂号（中缝图片）', open: 0, items: [
+const gSeamStamp: SchemaGroup = { id: 'seamstamp', title: '版心堂号（版界图片）', open: 0, items: [
   { k: 'seam_stamp_src', lb: '堂号图', type: 'asset',
-    tip: '从项目 assets/ 选图，盖在版心中缝上（与鱼尾、书名、页码并列），正文每叶都出现；留空 = 不输出。'
+    tip: '从项目 assets/ 选图，盖在版心版界上（与鱼尾、书名、页码并列），正文每叶都出现；留空 = 不输出。'
       + '素材入库时 PNG 会自动裁掉四周透明边，避免「占叶宽百分比」与实际视觉不符' },
   { k: 'seam_stamp_pos', lb: '纵向位置', type: 'num', min: 0, max: 1, step: 0.01,
     show: s => !!s.seam_stamp_src,
-    tip: '在中缝上的位置：0 = 内容区顶，1 = 内容区底（默认 0.5 正中，此处没有鱼尾/书名/页码，不会撞）。'
-      + '可在预览里按住上下拖动 —— 这是唯一的可调方向，横向恒居中于中缝' },
-  { k: 'seam_stamp_w', lb: '宽度', type: 'num', min: 0.1, max: 1, step: 0.05, unit: '× 中缝宽',
+    tip: '在版界上的位置：0 = 内容区顶，1 = 内容区底（默认 0.5 正中，此处没有鱼尾/书名/页码，不会撞）。'
+      + '可在预览里按住上下拖动 —— 这是唯一的可调方向，横向恒居中于版界' },
+  { k: 'seam_stamp_w', lb: '宽度', type: 'num', min: 0.1, max: 1, step: 0.05, unit: '× 版界宽',
     show: s => !!s.seam_stamp_src,
-    tip: '占「中缝宽度」的比例（默认 0.6），中缝窄的模板自动缩小；高度按图片原始宽高比推导，不会变形' },
+    tip: '占「版界宽度」的比例（默认 0.6），版界窄的模板自动缩小；高度按图片原始宽高比推导，不会变形' },
   { k: 'seam_stamp_opacity', lb: '浓淡', type: 'num', min: 0.1, max: 1, step: 0.02,
     show: s => !!s.seam_stamp_src, tip: '不透明白分比。0.9 接近实盖，调低更像淡印' },
 ]}
@@ -272,27 +287,30 @@ const gWatermark: SchemaGroup = { id: 'watermark', title: '叶面水印（正文
 
 /* ---------------- 扁平导出（兼容 / 工具读取） ---------------- */
 export const SCHEMA: SchemaGroup[] = [
-  gPaper, gFrame, gLeafSeam, gCenter,
+  gPaper, gFrame, gLeafBorder, gSeam, gDivider, gFish, gCenter,
   gGrid, gBody, gComment, gAccent, gChapter, gBadge, gRuby,
   gPunc, gSeamStamp, gWatermark,
 ]
 
 /* ---------------- 4 簇聚类（渲染用） ---------------- */
+/* 一个版面 = 页面版框 + 版心内容 + 内容样式 + 叠加装饰
+   版心内容 = 版心样式（版界 · 中缝 · 分割线 · 鱼尾）+ 版心文字（书名 · 卷次 · 页码）
+   内容样式 = 界行内容（字格 · 正文 · 夹注 · 强调 · 章节 · 徽标 · 注音 · 标点） */
 export const CLUSTERS: SchemaCluster[] = [
   {
-    id: 'c1', title: '一 · 页面骨架', sub: '硬 · 几何（由外到内）', open: 1,
-    groups: [gPaper, gFrame, gLeafSeam, gCenter],
+    id: 'c1', title: '一·页面版框', open: 1,
+    groups: [gPaper, gFrame],
   },
   {
-    id: 'c2', title: '二 · 文字与标注', sub: '软 · 内容样式', open: 0,
-    groups: [gGrid, gBody, gComment, gAccent, gChapter, gBadge, gRuby],
+    id: 'c2', title: '二·版心内容', open: 1,
+    groups: [gLeafBorder, gDivider, gSeam, gFish, gCenter],
   },
   {
-    id: 'c3', title: '三 · 标点机制', sub: '软 · 共享规则（统一收口）', open: 0,
-    groups: [gPunc],
+    id: 'c3', title: '三·内容样式', open: 0,
+    groups: [gGrid, gBody, gComment, gAccent, gChapter, gBadge, gRuby, gPunc],
   },
   {
-    id: 'c4', title: '四 · 叠加装饰', sub: '最软 · 覆盖层', open: 0,
+    id: 'c4', title: '四·叠加装饰', open: 0,
     groups: [gSeamStamp, gWatermark],
   },
 ]

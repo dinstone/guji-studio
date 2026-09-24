@@ -116,6 +116,6 @@ export function templateSummary(p: Record<string, any>): { paper: string; margin
     paper: `${orient}开本 · ${W}×${H}mm（${Math.round(num(p.canvas_width, 3508))}×${Math.round(num(p.canvas_height, 2480))}px）`,
     margins: `上${num(p.margins_top, 240)} 下${num(p.margins_bottom, 80)} 左${num(p.margins_left, 70)} 右${num(p.margins_right, 70)}`,
     layout: `${num(p.leaf_col, 16)} 列 × 每列 ${num(p.row_num, 22)} 字`,
-    font: famLabel + (p.fish_mode && p.fish_mode !== 'none' ? ' · 含鱼尾书口' : ' · 无书口'),
+    font: famLabel + (p.fish_mode && p.fish_mode !== 'none' ? ' · 含鱼尾中缝' : ' · 无中缝'),
   }
 }
