@@ -37,7 +37,12 @@ tasks:
   dev:
     summary: Runs the application in development mode
     cmds:
-      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+      # private_mac_apis：macOS 上打开 WebKit 检查器只能走私有 API。不带这个 tag 时，
+      # wails 的 wailsPrivateOpenWebInspector 在公共 API 构建里是空实现
+      # （pkg/application/mac_public_api_darwin.go 的 `#ifdef WAILS_MAC_DEVTOOLS` 分支），
+      # 于是「View → Open Developer Tools」（Alt+Cmd+I）点了毫无反应。
+      # wails 会把 EXTRA_TAGS 传给 build:native 的 BUILD_FLAGS（-tags …）。
+      - EXTRA_TAGS=private_mac_apis wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
   setup:docker:
     summary: Builds Docker image for cross-compilation (~800MB download)

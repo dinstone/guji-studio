@@ -52,7 +52,10 @@ dev_mode:
       - "*.ts" # The frontend directory will be excluded entirely by the setting above.
     git_ignore: true
   executes:
-    - cmd: wails3 build DEV=true
+    # private_mac_apis：macOS 上打开 WebKit 检查器只能走私有 API（见 Taskfile.yml 的 dev 任务注释）。
+    # wails3 build 的 -tags 会被转成 EXTRA_TAGS 传给 build:native 的 BUILD_FLAGS。
+    # 注意：wails3 task common:update:build-assets 会用 CLI 内嵌模板覆盖本文件，届时这一行需重新加回。
+    - cmd: wails3 build -tags private_mac_apis DEV=true
       type: blocking
     - cmd: wails3 task common:dev:frontend
       type: background
