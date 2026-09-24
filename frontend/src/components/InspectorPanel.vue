@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { SCHEMA, type SchemaItem } from '../core/schema'
+import { CLUSTERS, type SchemaItem, type SchemaGroup, type SchemaCluster } from '../core/schema'
 import {
   PAPER_SIZES, paperLabel, paperPx, exactPaper, matchPaper, type Orientation,
 } from '../core/papersize'
@@ -14,19 +14,28 @@ import FontPicker from './FontPicker.vue'
 import { appPrompt, appConfirm, appAlert } from '../stores/dialog'
 
 const open = reactive<Record<string, boolean>>({})
-SCHEMA.forEach(g => { open[g.id] = !!g.open })
+CLUSTERS.forEach(c => { open[c.id] = !!c.open; c.groups.forEach(g => { open[g.id] = !!g.open }) })
 
 const filter = ref('')
 function hit(it: SchemaItem) {
   if (!filter.value) return true
   return (it.lb + it.k).toLowerCase().includes(filter.value.toLowerCase())
 }
-function vis(g: { items: SchemaItem[] }) {
+function vis(g: SchemaGroup) {
   return g.items.filter(it => hit(it) && (!it.show || it.show(tplEdit)))
 }
 /* 置灰：控件保留可见但当前档位下取值不生效（如手动字号档下的「字距比例」） */
 function off(it: SchemaItem) {
   return !!(it.off && it.off(tplEdit))
+}
+/* 簇 / 组展开态：有筛选词时强制展开命中项，否则遵从用户折叠选择 */
+function groupOpen(g: SchemaGroup) {
+  const any = vis(g).length > 0
+  return filter.value ? any : (open[g.id] && any)
+}
+function clusterOpen(c: SchemaCluster) {
+  const any = c.groups.some(g => vis(g).length > 0)
+  return filter.value ? any : (open[c.id] && any)
 }
 
 const volName = computed(() => curBlockName())
@@ -147,73 +156,82 @@ const paperHint = computed(() => {
       >清除覆盖 {{ ovdCount }}</button>
     </div>
     <div class="groups">
-      <details v-for="g in SCHEMA" :key="g.id" :open="open[g.id] && vis(g).length > 0" class="grp">
-        <summary @click.prevent="open[g.id] = !open[g.id]">{{ g.title }}</summary>
-        <template v-if="g.id === 'paper'">
-          <div class="row">
-            <i class="ph" />
-            <label class="lb">常规尺寸</label>
-            <div class="ctl">
-              <select :value="currentPaperKey" @change="applyPaperSize">
-                <option value="">自定义</option>
-                <option v-for="o in paperOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
-              </select>
-            </div>
-          </div>
-          <div class="paper-hint">{{ paperHint }}</div>
-        </template>
-        <div v-for="it in vis(g)" :key="it.k" class="row" :class="{ off: off(it) }" :title="it.tip || ''">
-          <span
-            class="src" :class="srcInfo(it.k).cls"
-            :title="srcInfo(it.k).title"
-            @click="onSrcClick(it.k)"
-          >{{ srcInfo(it.k).text }}</span>
-          <label class="lb" :class="{ inhr: unit && !tplOverridden(it.k) }">{{ it.lb }}</label>
-          <div class="ctl">
-            <template v-if="it.type === 'num'">
-              <input v-model.number="tplEdit[it.k]" type="number" :min="it.min" :max="it.max" :step="it.step">
-              <span v-if="it.unit" class="unit">{{ it.unit }}</span>
-            </template>
-            <template v-else-if="it.type === 'bool'">
-              <input v-if="it.link" type="checkbox"
-                     :checked="tplEdit[it.link] === it.onval"
-                     @change="tplEdit[it.link] = ($event.target as HTMLInputElement).checked ? (it.onval as string) : ''">
-              <input v-else v-model="tplEdit[it.k]" type="checkbox" :true-value="1" :false-value="0">
-            </template>
-            <template v-else-if="it.type === 'color'">
-              <input v-model="tplEdit[it.k]" type="color" class="color">
-              <span class="unit">{{ tplEdit[it.k] }}</span>
-            </template>
-            <template v-else-if="it.type === 'sel'">
-              <select v-model="tplEdit[it.k]">
-                <option v-for="o in it.opts" :key="o[0]" :value="o[0]">{{ o[1] }}</option>
-              </select>
-            </template>
-            <template v-else-if="it.type === 'seg'">
-              <div class="seg">
-                <button
-                  v-for="o in it.opts" :key="o[0]"
-                  :class="{ on: tplEdit[it.k] === o[0] }"
-                  @click="tplEdit[it.k] = o[0]"
-                >{{ o[1] }}</button>
+      <section v-for="c in CLUSTERS" :key="c.id" class="cluster" :data-cid="c.id">
+        <details :open="clusterOpen(c)" class="clu">
+          <summary @click.prevent="open[c.id] = !open[c.id]">
+            <span class="ct">{{ c.title }}</span><span class="csub">{{ c.sub }}</span>
+          </summary>
+          <div class="cbody">
+            <details v-for="g in c.groups" :key="g.id" :open="groupOpen(g)" class="grp">
+              <summary @click.prevent="open[g.id] = !open[g.id]">{{ g.title }}</summary>
+              <template v-if="g.id === 'paper'">
+                <div class="row">
+                  <!-- 纸张组皆为书级参数，来源徽标不显示；此处不放 .ph 占位，保证与其它行左对齐 -->
+                  <label class="lb">常规尺寸</label>
+                  <div class="ctl">
+                    <select :value="currentPaperKey" @change="applyPaperSize">
+                      <option value="">自定义</option>
+                      <option v-for="o in paperOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="paper-hint">{{ paperHint }}</div>
+              </template>
+              <div v-for="it in vis(g)" :key="it.k" class="row" :class="{ off: off(it) }" :title="it.tip || ''">
+                <span
+                  class="src" :class="srcInfo(it.k).cls"
+                  :title="srcInfo(it.k).title"
+                  @click="onSrcClick(it.k)"
+                >{{ srcInfo(it.k).text }}</span>
+                <label class="lb" :class="{ inhr: unit && !tplOverridden(it.k) }">{{ it.lb }}</label>
+                <div class="ctl">
+                  <template v-if="it.type === 'num'">
+                    <input v-model.number="tplEdit[it.k]" type="number" :min="it.min" :max="it.max" :step="it.step">
+                    <span v-if="it.unit" class="unit">{{ it.unit }}</span>
+                  </template>
+                  <template v-else-if="it.type === 'bool'">
+                    <input v-if="it.link" type="checkbox"
+                           :checked="tplEdit[it.link] === it.onval"
+                           @change="tplEdit[it.link] = ($event.target as HTMLInputElement).checked ? (it.onval as string) : ''">
+                    <input v-else v-model="tplEdit[it.k]" type="checkbox" :true-value="1" :false-value="0">
+                  </template>
+                  <template v-else-if="it.type === 'color'">
+                    <input v-model="tplEdit[it.k]" type="color" class="color">
+                    <span class="unit">{{ tplEdit[it.k] }}</span>
+                  </template>
+                  <template v-else-if="it.type === 'sel'">
+                    <select v-model="tplEdit[it.k]">
+                      <option v-for="o in it.opts" :key="o[0]" :value="o[0]">{{ o[1] }}</option>
+                    </select>
+                  </template>
+                  <template v-else-if="it.type === 'seg'">
+                    <div class="seg">
+                      <button
+                        v-for="o in it.opts" :key="o[0]"
+                        :class="{ on: tplEdit[it.k] === o[0] }"
+                        @click="tplEdit[it.k] = o[0]"
+                      >{{ o[1] }}</button>
+                    </div>
+                  </template>
+                  <template v-else-if="it.type === 'text'">
+                    <input v-model="tplEdit[it.k]" type="text" :placeholder="it.ph">
+                  </template>
+                  <template v-else-if="it.type === 'fam'">
+                    <FontPicker v-model="tplEdit[it.k]" />
+                  </template>
+                  <template v-else-if="it.type === 'asset'">
+                    <button class="abtn" :disabled="picking === it.k" @click="pickAsset(it.k)">
+                      {{ picking === it.k ? '导入中…' : '选择图片…' }}
+                    </button>
+                    <span v-if="tplEdit[it.k]" class="aname" :title="tplEdit[it.k]">{{ tplEdit[it.k] }}</span>
+                    <button v-if="tplEdit[it.k]" class="ax" title="清除该项" @click="tplEdit[it.k] = ''">×</button>
+                  </template>
+                </div>
               </div>
-            </template>
-            <template v-else-if="it.type === 'text'">
-              <input v-model="tplEdit[it.k]" type="text" :placeholder="it.ph">
-            </template>
-            <template v-else-if="it.type === 'fam'">
-              <FontPicker v-model="tplEdit[it.k]" />
-            </template>
-            <template v-else-if="it.type === 'asset'">
-              <button class="abtn" :disabled="picking === it.k" @click="pickAsset(it.k)">
-                {{ picking === it.k ? '导入中…' : '选择图片…' }}
-              </button>
-              <span v-if="tplEdit[it.k]" class="aname" :title="tplEdit[it.k]">{{ tplEdit[it.k] }}</span>
-              <button v-if="tplEdit[it.k]" class="ax" title="清除该项" @click="tplEdit[it.k] = ''">×</button>
-            </template>
+            </details>
           </div>
-        </div>
-      </details>
+        </details>
+      </section>
     </div>
     <div class="ft">
       <button class="save" title="把当前图书的版式导入模板库（书名等书级内容不入库）" @click="saveAsTpl">存为模板…</button>
@@ -255,6 +273,14 @@ const paperHint = computed(() => {
 /* 继承态 label 颜色变淡，与左侧「继承」药丸配合即可 */
 .lb.inhr { color: #a09e95; }
 .groups { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px; }
+/* 簇：由外到内 / 由硬到软 的顶层分组；与组内分组（.grp）形成两级折叠 */
+.cluster { margin-bottom: 6px; }
+.clu { border: 0.5px solid #c9c6b8; border-radius: 7px; background: #f3f1ea; overflow: hidden; }
+.clu > summary { padding: 6px 9px; font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none; color: #3a3a35; display: flex; align-items: baseline; gap: 7px; }
+.clu > summary .ct { letter-spacing: 0.5px; }
+.clu > summary .csub { font-size: 10px; font-weight: 400; color: #8a877c; }
+.cbody { padding: 4px 4px 2px; }
+.cbody .grp:last-child { margin-bottom: 1px; }
 .grp { margin-bottom: 4px; border: 0.5px solid #e3e1d7; border-radius: 6px; background: #fff; }
 .grp summary { padding: 5px 8px; font-size: 12px; font-weight: 500; cursor: pointer; user-select: none; color: #444; }
 .row { display: flex; align-items: center; gap: 5px; padding: 2px 8px 2px 10px; font-size: 12px; }

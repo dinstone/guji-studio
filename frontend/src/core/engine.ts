@@ -1,7 +1,7 @@
 /* ==========================================================================
  * GujiStudio engine · 古籍版式计算引擎
  * 纯函数、无 DOM 依赖，可直接被 Vue / Node 复用
- * 计算链：纸张 -> 页边距 -> 版框(内外线) -> 版心(中缝/列) -> 行线 -> 字号
+ * 计算链：纸张 -> 页边距 -> 版框(内外框) -> 版心(中缝/列) -> 行线 -> 字号
  * 由原型期 vrain engine 迁入，逻辑与 tools 验证套件保持一致
  * ========================================================================== */
 // @ts-nocheck — 原型期纯 JS 迁入，暂不做全量类型化；UI 迁移期逐步补接口类型
@@ -121,7 +121,7 @@
     canvas_color: '#e9e2d0', canvas_background_image: '',
     /* 页边距 */
     margins_top: 240, margins_bottom: 80, margins_left: 70, margins_right: 70,
-    /* 版框：外粗线 + 内细线 */
+    /* 版框：外框(粗线) + 内框(细线) */
     outline_width: 10, outline_color: '#1a1a1a',
     inline_width: 1, inline_color: '#1a1a1a',
     outline_hmargin: 6, outline_vmargin: 6,
@@ -339,15 +339,15 @@
     var mt = num(t.margins_top, 0), mb = num(t.margins_bottom, 0),
         ml = num(t.margins_left, 0), mr = num(t.margins_right, 0);
 
-    // 版框外缘（外粗线路径所在矩形）
+    // 版框外缘（外框线路径所在矩形）
     var frame = { x: ml, y: mt, w: Math.max(W - ml - mr, 20), h: Math.max(H - mt - mb, 20) };
 
-    // 外粗线占内外各一半 + 内外线间距 + 内细线一半 = 内容区相对版框的内缩量
+    // 外框线占内外各一半 + 内外框间距 + 内框线一半 = 内容区相对版框的内缩量
     var ow = num(t.outline_width, 0), iw = num(t.inline_width, 0);
     var insetH = ow / 2 + num(t.outline_hmargin, 0) + iw / 2;
     var insetV = ow / 2 + num(t.outline_vmargin, 0) + iw / 2;
 
-    // 内细线包围的区域 = 可书写内容区
+    // 内框线包围的区域 = 可书写内容区
     var content = {
       x0: frame.x + insetH, y0: frame.y + insetV,
       x1: frame.x + frame.w - insetH, y1: frame.y + frame.h - insetV
@@ -1238,7 +1238,7 @@
   }
 
   /* ----------------------------------------------------------- 5. 渲染 SVG */
-  /* 注释徽标 SVG：牌记式竖排小徽标——外框圆角矩形 + 内细线 + 四角菱形花饰 + 竖排字
+  /* 注释徽标 SVG：牌记式竖排小徽标——外框圆角矩形 + 内框线 + 四角菱形花饰 + 竖排字
      famFallback：所在位置字体（正文→正文字体，夹注→夹注字体）；
      ctxOnly=1 时无视显式徽标字体设置，始终随所在位置（夹注内徽标永远随夹注） */
   function badgeSvg(t, cx, cy, size, text, famFallback, ctxOnly) {
@@ -1842,7 +1842,7 @@
       if (wmBox) o.push(assetEl(wmBox, clamp01(t.watermark_opacity, 0.12), 'v-wm'));
     }
 
-    /* 版框：外粗线 + 内细线 */
+    /* 版框：外框(粗线) + 内框(细线) */
     var fr = m.frame, ct = m.content;
     if (num(t.outline_width, 0) > 0)
       o.push('<rect x="' + f(fr.x) + '" y="' + f(fr.y) + '" width="' + f(fr.w) + '" height="' + f(fr.h) +

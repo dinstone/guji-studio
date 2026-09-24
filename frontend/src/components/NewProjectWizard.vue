@@ -171,7 +171,7 @@ const steps = ['基本信息', '版式设置', '确认创建']
             <div class="np-row">
               <span class="np-lab">列数</span>
               <input v-model.number="custom.leaf_col" class="np-in xs" type="number" min="1" max="40">
-              <span class="np-unit">每半叶列数</span>
+              <span class="np-unit">半叶列数</span>
             </div>
             <div class="np-row">
               <span class="np-lab">字数</span>

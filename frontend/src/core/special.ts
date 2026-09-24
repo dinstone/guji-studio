@@ -91,7 +91,7 @@ interface Pad { l: number; t: number; r: number; b: number }
 /** 半叶在对开叶中的位置：left = 左半（纸边在左），right = 右半（纸边在右） */
 export type HalfSide = 'left' | 'right'
 
-/** 书衣双框：外粗内细。内缩量可四边不同（跟随正文页边距：天头/地脚常不等） */
+/** 书衣双框：外框粗、内框细。内缩量可四边不同（跟随正文页边距：天头/地脚常不等） */
 function doubleFrame(W: number, H: number, pad: Pad): string {
   const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b
   const IN = 24                                  // 内外框间距

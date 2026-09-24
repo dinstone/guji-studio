@@ -1,4 +1,11 @@
-/* 版式参数面板 schema —— 自 studio 原型迁入 */
+/* 版式参数面板 schema —— 自 studio 原型迁入
+ *
+ * 组织原则（2026-09-23 定）：由外到内、由硬到软、聚类分组。
+ *   - SCHEMA：扁平的 14 个分组（保持旧导出，供兼容/工具读取）。
+ *   - CLUSTERS：4 个可折叠簇，按「页面骨架(硬·几何) → 文字与标注(软·内容)
+ *     → 标点机制(软·统一收口) → 叠加装饰(最软·覆盖层)」聚类。
+ *   参数 key 一个不变（重组只搬动归属），book.gvs / 模板零影响。
+ */
 export const FAMS: [string, string][] = [
   ['song_sc', '宋体·简'],
   ['song_tc', '宋体·繁'],
@@ -23,218 +30,269 @@ export interface SchemaItem {
   link?: string; onval?: string
 }
 export interface SchemaGroup { id: string; title: string; open: number; items: SchemaItem[] }
+export interface SchemaCluster { id: string; title: string; sub: string; open: number; groups: SchemaGroup[] }
 
+/* ---------------- 分组（扁平，key 唯一） ---------------- */
+
+/* 一·纸张设置：纸张 + 页边距 合并 */
+const gPaper: SchemaGroup = { id: 'paper', title: '纸张设置', open: 1, items: [
+  { k: 'canvas_width', lb: '纸宽', type: 'num', min: 600, max: 6000, step: 20, unit: 'px' },
+  { k: 'canvas_height', lb: '纸高', type: 'num', min: 600, max: 6000, step: 20, unit: 'px' },
+  { k: 'margins_top', lb: '上边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
+  { k: 'margins_bottom', lb: '下边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
+  { k: 'margins_left', lb: '左边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
+  { k: 'margins_right', lb: '右边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
+  { k: 'canvas_color', lb: '纸色', type: 'color' },
+  { k: 'xuanwen', lb: '宣纹', type: 'bool', link: 'canvas_background_image', onval: 'textures/xuan.jpg', tip: '打开=底图使用宣纸纹理（textures/xuan.jpg），关闭=恢复纯色（与「底图」字段同步）' },
+  { k: 'canvas_background_image', lb: '底图', type: 'text', ph: '留空=纯色；填图片路径/dataURL=拉伸铺满纸张' },
+]}
+
+/* 二·版框：列数 + 外框(粗线) + 内框(细线) + 界行（列数自「版心与中缝」迁入） */
+const gFrame: SchemaGroup = { id: 'frame', title: '版框（列数 · 边框 · 界行）', open: 1, items: [
+  { k: 'leaf_col', lb: '半叶列数', type: 'num', min: 1, max: 40, step: 1, unit: '列', tip: '列数决定字格横向排布，与「版心中缝」共同定位版心；现置于版框组，因它直接约束内容区列划分' },
+  { k: 'outline_width', lb: '外框线宽', type: 'num', min: 0, max: 40, step: 1, unit: 'px' },
+  { k: 'outline_color', lb: '外框线色', type: 'color' },
+  { k: 'inline_width', lb: '内框线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
+  { k: 'inline_color', lb: '内框线色', type: 'color' },
+  { k: 'outline_hmargin', lb: '内外框横距', type: 'num', min: 0, max: 60, step: 1, unit: 'px' },
+  { k: 'outline_vmargin', lb: '内外框纵距', type: 'num', min: 0, max: 60, step: 1, unit: 'px' },
+  { k: 'if_vline', lb: '界行竖线', type: 'bool', tip: '列与列之间的细分隔线，贯通内容区上下' },
+  { k: 'vline_width', lb: '界行线宽', type: 'num', min: 0, max: 10, step: 0.5, unit: 'px', show: s => !!s.if_vline },
+  { k: 'vline_color', lb: '界行线色', type: 'color', show: s => !!s.if_vline },
+]}
+
+/* 三·版心中缝：中缝宽/界行线 + 书口(象鼻) + 鱼尾 —— 同一条中缝竖条上的东西归到一起 */
+const gLeafSeam: SchemaGroup = { id: 'leafseam', title: '版心中缝（中缝 · 书口 · 鱼尾）', open: 1, items: [
+  { k: 'leaf_center_width', lb: '中缝宽', type: 'num', min: 0, max: 600, step: 5, unit: 'px', tip: '中缝宽同时决定版心界行间距与鱼尾宽' },
+  { k: 'fish_line_width', lb: '版心界行线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
+  { k: 'fish_line_color', lb: '版心界行线色', type: 'color' },
+  { k: 'if_seam', lb: '书口样式', type: 'sel', opts: [['none', '无'], ['single', '单象鼻'], ['double', '双象鼻']], tip: '象鼻 = 中缝中线竖线；横线宽贯中缝，两横线之间留给书名/卷次/页码' },
+  { k: 'seam_width', lb: '象鼻线宽', type: 'num', min: 0, max: 120, step: 1, unit: 'px', show: s => s.if_seam !== 'none' },
+  { k: 'seam_color', lb: '书口线色', type: 'color', show: s => s.if_seam !== 'none' },
+  { k: 'fish_auto', lb: '分割线 Y 自动', type: 'bool', tip: '随内框定位：上分割线 = 上内框 + 留白，下分割线 = 下内框 − 留白，换纸张高度不错位。取消勾选后可手填 Y' },
+  { k: 'fish_top_pad', lb: '上分割线留白', type: 'num', min: 0, max: 1000, step: 10, unit: 'px', show: s => !!s.fish_auto },
+  { k: 'fish_top_y', lb: '上分割线 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.fish_auto },
+  { k: 'seam_top_linewidth', lb: '上横线宽', type: 'num', min: 0, max: 60, step: 1, unit: 'px', show: s => s.if_seam !== 'none' },
+  { k: 'fish_line_margin', lb: '象鼻横线与鱼身间隙', type: 'num', min: 0, max: 50, step: 1, unit: 'px', tip: '书口横线（象鼻）与鱼身之间的悬挂间隙' },
+  { k: 'fish_btm_pad', lb: '下分割线留白', type: 'num', min: 0, max: 1000, step: 10, unit: 'px', show: s => !!s.fish_auto && (s.if_seam === 'double' || s.fish_mode === 'double' || s.fish_mode === 'triple') },
+  { k: 'fish_btm_y', lb: '下分割线 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.fish_auto && (s.if_seam === 'double' || s.fish_mode === 'double' || s.fish_mode === 'triple') },
+  { k: 'seam_btm_linewidth', lb: '下横线宽', type: 'num', min: 0, max: 60, step: 1, unit: 'px', show: s => s.if_seam === 'double' },
+  { k: 'fish_mode', lb: '鱼尾样式', type: 'sel', opts: [['none', '无'], ['single', '单鱼尾'], ['double', '双鱼尾'], ['triple', '三鱼尾']], tip: '三鱼尾 = 上(尖朝下) + 中(可调方向/位置) + 下(固定尖朝上)；双鱼尾下鱼尾固定尖朝上，方向不可调' },
+  { k: 'fish_shape', lb: '鱼尾形状', type: 'sel', opts: [['triangle', '三角'], ['arc', '弧形'], ['flower', '花瓣']] },
+  { k: 'fish_decor', lb: '鱼尾花饰', type: 'bool' },
+  { k: 'fish_top_rectheight', lb: '上鱼身高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode !== 'none' },
+  { k: 'fish_top_triaheight', lb: '上鱼尾高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode !== 'none' },
+  { k: 'fish_top_color', lb: '上鱼尾色', type: 'color', show: s => s.fish_mode !== 'none' },
+  { k: 'fish_btm_rectheight', lb: '下鱼身高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode === 'double' || s.fish_mode === 'triple' },
+  { k: 'fish_btm_triaheight', lb: '下鱼尾高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode === 'double' || s.fish_mode === 'triple' },
+  { k: 'fish_btm_color', lb: '下鱼尾色', type: 'color', show: s => s.fish_mode === 'double' || s.fish_mode === 'triple' },
+  { k: 'fish_mid_direction', lb: '中鱼尾朝向', type: 'sel', opts: [['0', '尖朝下'], ['1', '尖朝上']], show: s => s.fish_mode === 'triple', tip: '默认尖朝下（同上鱼尾）；翻成尖朝上即与下鱼尾同向' },
+  { k: 'fish_mid_pos', lb: '中鱼尾位置', type: 'num', min: 0, max: 1, step: 0.01, unit: '× 内容区高', show: s => s.fish_mode === 'triple', tip: '0 = 内容区顶，1 = 内容区底，默认 0.5 居中（上下鱼尾之间）' },
+  { k: 'fish_mid_rectheight', lb: '中鱼身高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode === 'triple' },
+  { k: 'fish_mid_triaheight', lb: '中鱼尾高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode === 'triple' },
+  { k: 'fish_mid_color', lb: '中鱼尾色', type: 'color', show: s => s.fish_mode === 'triple' },
+]}
+
+/* 四·版心文字：书名 / 卷次 / 页码 */
+const gCenter: SchemaGroup = { id: 'center', title: '版心文字（书名 / 卷次 / 页码）', open: 0, items: [
+  { k: 'title_text', lb: '书名', type: 'text', tip: '版心书名。真源 = 项目信息里的「图书名称」（改这里即改项目书名，两处同步）；留空则按「项目名称」填充（新建向导/项目信息里那句「留空则使用项目名称」即此义），项目名称也为空时才显示占位「图书名称」，不会留白。单元作用域下改 = 只改本单元，清空即本单元版心不排书名' },
+  { k: 'title_postfix', lb: '卷次后缀', type: 'text', ph: '卷X，X 自动替换为卷号', tip: '正文卷已有分组名时按分组名显示，此项仅在无分组名（默认卷/导读附录）时兜底' },
+  { k: 'title_volnames', lb: '逐卷卷名', type: 'text', ph: '道经|德经，按卷序以 | 分隔', tip: '正文卷已有分组名时按分组名显示，此项仅作兜底' },
+  { k: 'if_tpcenter', lb: '书名居中', type: 'bool' },
+  { k: 'title_font_size', lb: '书名字号', type: 'num', min: 10, max: 200, step: 2, unit: 'px' },
+  { k: 'title_font_family', lb: '书名卷次字体', type: 'fam' },
+  { k: 'title_y_auto', lb: '书名 Y 自动', type: 'bool', tip: '勾选后书名 Y 按内容区比例（上内框 + 纵向 20%）落位，即上—中鱼尾之间；取消勾选可手填' },
+  { k: 'title_y', lb: '书名 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.title_y_auto },
+  { k: 'title_ydis', lb: '书名字距', type: 'num', min: 0.6, max: 2, step: 0.01, unit: '×' },
+  { k: 'title_color', lb: '书名颜色', type: 'color' },
+  { k: 'vol_y_auto', lb: '卷次 Y 自动', type: 'bool', tip: '勾选后卷次 Y 按内容区比例（上内框 + 纵向 62%）落位，即中—下鱼尾之间，独立于书名/页码；取消勾选可手填' },
+  { k: 'vol_y', lb: '卷次 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.vol_y_auto },
+  { k: 'pager_style', lb: '页码样式', type: 'sel', opts: [['cn', '中文数字'], ['arabic', '阿拉伯数字']] },
+  { k: 'pager_font_size', lb: '页码字号', type: 'num', min: 8, max: 120, step: 2, unit: 'px' },
+  { k: 'pager_font_family', lb: '页码字体', type: 'fam' },
+  { k: 'pager_y_auto', lb: '页码 Y 自动', type: 'bool', tip: '勾选后页码 Y 按内容区比例（上内框 + 纵向 70%）落位，即卷次下方；取消勾选可手填' },
+  { k: 'pager_y', lb: '页码 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.pager_y_auto },
+  { k: 'pager_color', lb: '页码颜色', type: 'color' },
+]}
+
+/* 五·字格：列/行几何（行与正文拆分出的「格子」部分） */
+const gGrid: SchemaGroup = { id: 'grid', title: '字格（每列字数 · 行列定位 · 字号自适应）', open: 1, items: [
+  { k: 'row_num', lb: '每列字数', type: 'num', min: 4, max: 80, step: 1, unit: '字' },
+  { k: 'row_start_auto', lb: '起始线自动', type: 'bool' },
+  { k: 'row_top_pad', lb: '起始留白', type: 'num', min: 0, max: 300, step: 5, unit: 'px', show: s => s.row_start_auto },
+  { k: 'row_start_y', lb: '行起始线 Y', type: 'num', min: 0, max: 3000, step: 5, unit: 'px', show: s => !s.row_start_auto },
+  { k: 'row_end_auto', lb: '结束线自动', type: 'bool' },
+  { k: 'row_delta_y', lb: '末字留白', type: 'num', min: 0, max: 300, step: 5, unit: 'px', show: s => s.row_end_auto },
+  { k: 'wrap_indent', lb: '回行缩进', type: 'seg', opts: [['0', '无'], ['1', '空1字'], ['2', '空2字']], tip: '段首（显式换列 br/章节/% $ &）顶格；回行（正文·强调·夹注自然溢出续列）列头空 N 字格。夹注续列同属溢出续列一并空 N。仅影响续列起始位置，不改字号、标点与末字留白' },
+  { k: 'row_end_y', lb: '行结束线 Y', type: 'num', min: 0, max: 3000, step: 5, unit: 'px', show: s => !s.row_end_auto },
+  { k: 'text_size_auto', lb: '字号自动', type: 'bool', tip: '字号 = 行高 ÷ (每列字数 × 字距比例)；字格恒锁 = 行高 ÷ 每列字数' },
+  { k: 'text_size_fitcol', lb: '字号受限列宽', type: 'bool', show: s => s.text_size_auto },
+  { k: 'text_col_ratio', lb: '字号/列宽上限', type: 'num', min: 0.5, max: 1.4, step: 0.01, unit: '×', show: s => s.text_size_auto && s.text_size_fitcol },
+]}
+
+/* 六·正文：字体/颜色/字距（行与正文拆分出的「内容」部分） */
+const gBody: SchemaGroup = { id: 'body', title: '正文（字体 · 颜色 · 字距）', open: 1, items: [
+  { k: 'text_font1_size', lb: '正文字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', show: s => !s.text_size_auto, tip: '手动档：字格恒锁 = 行高 ÷ 每列字数，字号本身即决定字的疏密（字号小 → 字间缝大）' },
+  { k: 'text_ydis', lb: '字距比例', type: 'num', min: 0.6, max: 2, step: 0.01, unit: '×', off: s => !s.text_size_auto, tip: '自动档：字格锁定（行高÷每列字数），本项只改字号 → 即字的疏密；手动档：字号自定，本项不生效（改「正文字号」即调疏密）' },
+  { k: 'text_font_family', lb: '正文字体', type: 'fam' },
+  { k: 'text_font_color', lb: '正文颜色', type: 'color' },
+]}
+
+/* 七·夹注 */
+const gComment: SchemaGroup = { id: 'comment', title: '夹注（双行小字）', open: 0, items: [
+  { k: 'comment_size_auto', lb: '字号自动', type: 'bool', tip: '夹注字号 =「规范正文字号」× 比例（规范字号 = 字距比例 1 时、字身恰好占满字格的字号）→ 调「字距比例」只改正文疏密，夹注块整体纹丝不动' },
+  { k: 'comment_size_ratio', lb: '字号比例', type: 'num', min: 0.2, max: 1, step: 0.01, unit: '×', show: s => s.comment_size_auto, tip: '夹注字号 ÷ 规范正文字号；夹注块占格 = ⌈行数 × 本比例⌉ 个正文字位（每两个字占一格）' },
+  { k: 'comment_font1_size', lb: '夹注字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', show: s => !s.comment_size_auto },
+  { k: 'comment_ydis', lb: '字距比例', type: 'num', min: 0.6, max: 2, step: 0.01, unit: '×', tip: '块内注字行距比例。夹注块占格与正文字距无关（已锁定），行距上限 = 块内均分高，故调大到 1× 以上行距不再增大' },
+  { k: 'comment_font_family', lb: '夹注字体', type: 'fam' },
+  { k: 'comment_font_color', lb: '夹注颜色', type: 'color' },
+]}
+
+/* 八·强调（逗号类标点收口到「标点处理」组，此处只留样式） */
+const gAccent: SchemaGroup = { id: 'accent', title: '强调样式（[] 标记）', open: 0, items: [
+  { k: 'accent_font_family', lb: '强调字体', type: 'fam', tip: '缺省 = 正文字体（[] 包裹内容默认同正文，字号 ×0.9）' },
+  { k: 'accent_font_size', lb: '强调字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', tip: '缺省 = 正文字号 × 0.9' },
+  { k: 'accent_font_color', lb: '强调颜色', type: 'color', tip: '缺省 = 正文颜色' },
+  { k: 'accent_letter_spacing', lb: '强调字距', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字', tip: '竖排下为字间纵向间隙，0 = 无' },
+]}
+
+/* 九·章节标题 */
+const gChapter: SchemaGroup = { id: 'chapter', title: '章节标题（行首 # 标记）', open: 0, items: [
+  { k: 'chapter_font_color', lb: '标题颜色', type: 'color' },
+  { k: 'chapter_punct_90', lb: '章节标点竖排', type: 'bool', tip: '章节标点永远整格占位；开启则引号括号类使用字体竖排字形（vert）立起来' },
+  { k: 'chapter1_align', lb: '一级 # 对齐', type: 'sel', opts: ALIGN },
+  { k: 'chapter1_font_delta', lb: '一级 字号±', type: 'num', min: -200, max: 300, step: 1, unit: 'px', tip: '标题字号 = 正文字号 + 本值（px），各级同理。注音开启时与正文同比例缩；字号撞列宽上限后本值不再生效' },
+  { k: 'chapter1_font_family', lb: '一级 字体', type: 'fam' },
+  { k: 'chapter1_bold', lb: '一级 加粗', type: 'bool' },
+  { k: 'chapter2_align', lb: '二级 ## 对齐', type: 'sel', opts: ALIGN },
+  { k: 'chapter2_font_delta', lb: '二级 字号±', type: 'num', min: -200, max: 300, step: 1, unit: 'px' },
+  { k: 'chapter2_font_family', lb: '二级 字体', type: 'fam' },
+  { k: 'chapter2_bold', lb: '二级 加粗', type: 'bool' },
+  { k: 'chapter3_align', lb: '三级 ### 对齐', type: 'sel', opts: ALIGN },
+  { k: 'chapter3_font_delta', lb: '三级 字号±', type: 'num', min: -200, max: 300, step: 1, unit: 'px' },
+  { k: 'chapter3_font_family', lb: '三级 字体', type: 'fam' },
+  { k: 'chapter3_bold', lb: '三级 加粗', type: 'bool' },
+  { k: 'chapter4_align', lb: '四级 #### 对齐', type: 'sel', opts: ALIGN },
+  { k: 'chapter4_font_delta', lb: '四级 字号±', type: 'num', min: -200, max: 300, step: 1, unit: 'px' },
+  { k: 'chapter4_font_family', lb: '四级 字体', type: 'fam' },
+  { k: 'chapter4_bold', lb: '四级 加粗', type: 'bool' },
+]}
+
+/* 十·徽标 */
+const gBadge: SchemaGroup = { id: 'badge', title: '注释徽标（{} 标记）', open: 0, items: [
+  { k: 'badge_show', lb: '显示徽标', type: 'bool', tip: '关闭后正文与夹注中的 {徽标} 整体隐藏、不占位' },
+  { k: 'badge_color', lb: '徽标颜色', type: 'color', show: s => !!s.badge_show },
+  { k: 'badge_font_family', lb: '徽标字体', type: 'fam', tip: '仅作用于正文中的徽标；夹注内徽标始终随夹注字体', show: s => !!s.badge_show },
+  { k: 'badge_size', lb: '徽标字号', type: 'num', min: 0, max: 400, step: 1, unit: 'px', tip: '0 = 自动随正文字号；仅作用于正文中的徽标（按框高占多格），夹注内徽标始终随夹注字号', show: s => !!s.badge_show },
+  { k: 'badge_decor', lb: '花饰', type: 'bool', tip: '内框线 + 四角菱形花饰', show: s => !!s.badge_show },
+]}
+
+/* 十一·注音 */
+const gRuby: SchemaGroup = { id: 'ruby', title: '注音（^拼音^ 标记）', open: 0, items: [
+  { k: 'ruby_show', lb: '注音', type: 'sel', opts: [[0, '关闭'], [1, '开启'], [2, '自动（全书有注音才缩字）']],
+    tip: '注音为横排小字，落在「字与字的空隙」里，不占字位、不改变列数/每列字数/分页/页码/目录。'
+      + '开启后正文字形会等比略缩以腾出呼吸；「自动」档 = 全书一处注音都没有时完全等同现状' },
+  { k: 'ruby_size_ratio', lb: '注音字号比', type: 'num', min: 0.05, max: 1, step: 0.01, unit: '×正文',
+    show: s => Number(s.ruby_show) !== 0,
+    tip: '注音字号 / 正文字号。0.18 最省字（@300dpi ≈3.7pt）；嫌小可调到 0.25~0.30（正文字形会相应多缩一点）' },
+  { k: 'ruby_gap', lb: '呼吸间距', type: 'num', min: 0, max: 40, step: 0.5, unit: 'px',
+    show: s => Number(s.ruby_show) !== 0,
+    tip: '注音与上下汉字的合计净空（按下方「纵向偏置」的比例分配）。'
+      + '调大 = 更疏朗，但正文字形会更小（2px 为默认的紧凑值）' },
+  { k: 'ruby_bias', lb: '纵向偏置', type: 'num', min: 0, max: 1, step: 0.05, unit: '',
+    show: s => Number(s.ruby_show) !== 0,
+    tip: '注音在字间空隙里的落位偏好。0 = 上下居中；1 = 注音盒底完全贴住下方本字的墨迹上沿。'
+      + '注音是注给「下方本字」的，故默认 0.3（上:下 ≈ 1.86:1，略偏本字）' },
+  { k: 'ruby_font_family', lb: '注音字体', type: 'fam', show: s => Number(s.ruby_show) !== 0,
+    tip: '默认西文衬线栈（Times New Roman / Georgia）；注音一律横排，不需要竖排字形' },
+  { k: 'ruby_color', lb: '注音颜色', type: 'color', show: s => Number(s.ruby_show) !== 0,
+    tip: '留空 = 跟随正文颜色' },
+  { k: 'tag_ruby', lb: '注音标记符', type: 'text',
+    tip: '成对的两个符号，默认 ^^ —— 正文写作 `字^pīn^`，注音挂在该字上方；夹注/强调内部不解析' },
+]}
+
+/* 十二·标点处理（统一收口：正文·夹注·强调 三处的逗号类标点机制合并于此） */
+const gPunc: SchemaGroup = { id: 'punc', title: '标点处理（正文 · 夹注 · 强调 统一）', open: 0, items: [
+  { k: 'text_comma_mode', lb: '正文标点', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '全角占1位；悬空小字贴前字右下角不占位；句读=古籍圈点（，、；：→读点、。！？→句圈，恒按悬空不占格）；无=白文。此档只管正文行文，章节标题不受影响——章题标点恒整格原样' },
+  { k: 'text_comma_pos', lb: '正文标点位', type: 'seg', opts: [['right', '居右'], ['center', '居中']], tip: '居右=字格右侧、与上字自动留隙（默认）；居中=墨迹落字格中央' },
+  { k: 'text_comma_zhu', lb: '正文朱色', type: 'bool', tip: '套印本句读圈点：正文标点染朱色' },
+  { k: 'comment_comma_mode', lb: '夹注标点', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '悬空/句读：nop 贴前字角不占位，rot（「」（）类）占整格' },
+  { k: 'comment_comma_pos', lb: '夹注标点位', type: 'seg', opts: [['right', '居右'], ['center', '居中']], tip: '居右=注字格右侧、行距自适应留隙（默认）；居中=墨迹落注字格中央' },
+  { k: 'comment_comma_zhu', lb: '夹注朱色', type: 'bool' },
+  { k: 'comment_comma_fullwidth', lb: '夹注半角转全角', type: 'bool' },
+  { k: 'hang_scale', lb: '悬空·标点大小', type: 'num', min: 0.1, max: 1, step: 0.02, unit: '×', tip: '句读模式下同时作为「读点（、）」大小；也是夹注末字后小字标点（挤挂）的大小——夹注只在挤挂能省下正文字位时才挤挂。正文/强调的避头不走这里：闭号按「标点压缩」全尺寸排进列底余白（装不下才自动等比缩）' },
+  { k: 'jd_ring_scale', lb: '句读·句圈直径', type: 'num', min: 0.1, max: 1, step: 0.02, unit: '×' },
+  { k: 'jd_ring_stroke', lb: '句读·句圈线宽', type: 'num', min: 0, max: 0.2, step: 0.01, unit: '×', tip: '0 = 实心圈' },
+  { k: 'text_hang_x', lb: '正文悬空·横移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
+  { k: 'text_hang_y', lb: '正文悬空·纵移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
+  { k: 'comment_hang_x', lb: '夹注悬空·横移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
+  { k: 'comment_hang_y', lb: '夹注悬空·纵移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
+  { k: 'text_comma_color', lb: '标点颜色', type: 'color' },
+  { k: 'text_comma_nop', lb: '正文·不占位字符', type: 'text', tip: '如 ，、。：；！？ 等按悬空/句读模式贴前字角、不占整格的标点' },
+  { k: 'text_comma_90', lb: '正文·竖排标点字符', type: 'text', tip: '如 「」（）《》…— 等用字体竖排字形（vert）立起来的标点；闭号（》」）另受避头点保护不居列首——列满时按「标点压缩」排到末字之后、列底余白里，全尺寸（余白装不下才等比缩），不占列内格、不增列不增页。「无标点」模式下整组不渲染、不占格' },
+  { k: 'comment_comma_nop', lb: '夹注·不占位字符', type: 'text', tip: '同正文，作用于夹注内部' },
+  { k: 'comment_comma_90', lb: '夹注·竖排标点字符', type: 'text', tip: '同正文，作用于夹注内部' },
+  { k: 'accent_comma_mode', lb: '强调标点模式', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '缺省 = 跟随正文标点模式；可独立设置强调段标点（统一收口至「标点处理」组）' },
+  { k: 'accent_comma_color', lb: '强调标点颜色', type: 'color', tip: '缺省 = 强调颜色（与文字同色）；填朱色 #a8322a 即朱印标点' },
+  { k: 'accent_comma_nop', lb: '强调·不占位字符', type: 'text', tip: '缺省 = 与正文同字符集（、，。：；！？）' },
+  { k: 'accent_comma_90', lb: '强调·竖排标点字符', type: 'text', tip: '缺省 = 与正文同字符集（「」〔〕…（）类），使用字体竖排字形（vert）立起来' },
+  { k: 'accent_comma_fullwidth', lb: '强调半角转全角', type: 'bool', tip: '缺省 = 开启；将强调段内半角标点转全角' },
+]}
+
+/* 十三·版心堂号 */
+const gSeamStamp: SchemaGroup = { id: 'seamstamp', title: '版心堂号（中缝图片）', open: 0, items: [
+  { k: 'seam_stamp_src', lb: '堂号图', type: 'asset',
+    tip: '从项目 assets/ 选图，盖在版心中缝上（与鱼尾、书名、页码并列），正文每叶都出现；留空 = 不输出。'
+      + '素材入库时 PNG 会自动裁掉四周透明边，避免「占叶宽百分比」与实际视觉不符' },
+  { k: 'seam_stamp_pos', lb: '纵向位置', type: 'num', min: 0, max: 1, step: 0.01,
+    show: s => !!s.seam_stamp_src,
+    tip: '在中缝上的位置：0 = 内容区顶，1 = 内容区底（默认 0.5 正中，此处没有鱼尾/书名/页码，不会撞）。'
+      + '可在预览里按住上下拖动 —— 这是唯一的可调方向，横向恒居中于中缝' },
+  { k: 'seam_stamp_w', lb: '宽度', type: 'num', min: 0.1, max: 1, step: 0.05, unit: '× 中缝宽',
+    show: s => !!s.seam_stamp_src,
+    tip: '占「中缝宽度」的比例（默认 0.6），中缝窄的模板自动缩小；高度按图片原始宽高比推导，不会变形' },
+  { k: 'seam_stamp_opacity', lb: '浓淡', type: 'num', min: 0.1, max: 1, step: 0.02,
+    show: s => !!s.seam_stamp_src, tip: '不透明白分比。0.9 接近实盖，调低更像淡印' },
+]}
+
+/* 十四·叶面水印 */
+const gWatermark: SchemaGroup = { id: 'watermark', title: '叶面水印（正文每叶）', open: 0, items: [
+  { k: 'watermark_src', lb: '水印图', type: 'asset',
+    tip: '盖在纸张上的图片，压在版框与文字之下，正文每叶都出现；留空 = 不输出。'
+      + '水印范围只含正文叶（封面/扉页/牌记/尾页不参与）' },
+  { k: 'watermark_x', lb: '横向位置', type: 'num', min: 0, max: 1, step: 0.01,
+    show: s => !!s.watermark_src, tip: '图心在纸张上的横向比例（0 = 左缘，1 = 右缘）；可在预览里拖动' },
+  { k: 'watermark_y', lb: '纵向位置', type: 'num', min: 0, max: 1, step: 0.01,
+    show: s => !!s.watermark_src, tip: '图心在纸张上的纵向比例（0 = 上缘，1 = 下缘）；可在预览里拖动' },
+  { k: 'watermark_w', lb: '宽度', type: 'num', min: 0.05, max: 2, step: 0.05, unit: '× 纸宽',
+    show: s => !!s.watermark_src, tip: '占纸张宽度的比例（默认 0.5）；高度按原图宽高比推导' },
+  { k: 'watermark_opacity', lb: '浓淡', type: 'num', min: 0.02, max: 1, step: 0.02,
+    show: s => !!s.watermark_src, tip: '默认 0.12 —— 淡到不夺正文，是水印该有的样子' },
+]}
+
+/* ---------------- 扁平导出（兼容 / 工具读取） ---------------- */
 export const SCHEMA: SchemaGroup[] = [
-  { id: 'paper', title: '一、纸张', open: 1, items: [
-    { k: 'canvas_width', lb: '纸宽', type: 'num', min: 600, max: 6000, step: 20, unit: 'px' },
-    { k: 'canvas_height', lb: '纸高', type: 'num', min: 600, max: 6000, step: 20, unit: 'px' },
-    { k: 'canvas_color', lb: '纸色', type: 'color' },
-    { k: 'xuanwen', lb: '宣纹', type: 'bool', link: 'canvas_background_image', onval: 'textures/xuan.jpg', tip: '打开=底图使用宣纸纹理（textures/xuan.jpg），关闭=恢复纯色（与「底图」字段同步）' },
-    { k: 'canvas_background_image', lb: '底图', type: 'text', ph: '留空=纯色；填图片路径/dataURL=拉伸铺满纸张' },
-  ]},
-  { id: 'margins', title: '二、页边距', open: 1, items: [
-    { k: 'margins_top', lb: '上', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
-    { k: 'margins_bottom', lb: '下', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
-    { k: 'margins_left', lb: '左', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
-    { k: 'margins_right', lb: '右', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
-  ]},
-  { id: 'frame', title: '三、版框（外粗线 + 内细线）', open: 1, items: [
-    { k: 'outline_width', lb: '外粗线宽', type: 'num', min: 0, max: 40, step: 1, unit: 'px' },
-    { k: 'outline_color', lb: '外粗线色', type: 'color' },
-    { k: 'inline_width', lb: '内细线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
-    { k: 'inline_color', lb: '内细线色', type: 'color' },
-    { k: 'outline_hmargin', lb: '内外线横距', type: 'num', min: 0, max: 60, step: 1, unit: 'px' },
-    { k: 'outline_vmargin', lb: '内外线纵距', type: 'num', min: 0, max: 60, step: 1, unit: 'px' },
-    { k: 'if_vline', lb: '界行竖线', type: 'bool', tip: '列与列之间的细分隔线，贯通内容区上下' },
-    { k: 'vline_width', lb: '界行线宽', type: 'num', min: 0, max: 10, step: 0.5, unit: 'px', show: s => !!s.if_vline },
-    { k: 'vline_color', lb: '界行线色', type: 'color', show: s => !!s.if_vline },
-  ]},
-  { id: 'leaf', title: '四、版心与中缝', open: 1, items: [
-    { k: 'leaf_col', lb: '每半叶列数', type: 'num', min: 1, max: 40, step: 1, unit: '列' },
-    { k: 'leaf_center_width', lb: '中缝宽', type: 'num', min: 0, max: 600, step: 5, unit: 'px', tip: '中缝宽同时决定版心界行间距与鱼尾宽' },
-    { k: 'fish_line_width', lb: '版心界行线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
-    { k: 'fish_line_color', lb: '版心界行线色', type: 'color' },
-  ]},
-  { id: 'seam', title: '五、书口（象鼻 + 横线）', open: 1, items: [
-    { k: 'if_seam', lb: '书口样式', type: 'sel', opts: [['none', '无'], ['single', '单象鼻'], ['double', '双象鼻']], tip: '象鼻 = 中缝中线竖线；横线宽贯中缝，两横线之间留给书名/卷次/页码' },
-    { k: 'seam_width', lb: '象鼻线宽', type: 'num', min: 0, max: 120, step: 1, unit: 'px', show: s => s.if_seam !== 'none' },
-    { k: 'seam_color', lb: '书口线色', type: 'color', show: s => s.if_seam !== 'none' },
-    { k: 'fish_auto', lb: '分割线 Y 自动', type: 'bool', tip: '随内框定位：上分割线 = 上内框 + 留白，下分割线 = 下内框 − 留白，换纸张高度不错位。取消勾选后可手填 Y' },
-    { k: 'fish_top_pad', lb: '上分割线留白', type: 'num', min: 0, max: 1000, step: 10, unit: 'px', show: s => !!s.fish_auto },
-    { k: 'fish_top_y', lb: '上分割线 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.fish_auto },
-    { k: 'seam_top_linewidth', lb: '上横线宽', type: 'num', min: 0, max: 60, step: 1, unit: 'px', show: s => s.if_seam !== 'none' },
-    { k: 'fish_line_margin', lb: '象鼻横线与鱼身间隙', type: 'num', min: 0, max: 50, step: 1, unit: 'px', tip: '书口横线（象鼻）与鱼身之间的悬挂间隙' },
-    { k: 'fish_btm_pad', lb: '下分割线留白', type: 'num', min: 0, max: 1000, step: 10, unit: 'px', show: s => !!s.fish_auto && (s.if_seam === 'double' || s.fish_mode === 'double' || s.fish_mode === 'triple') },
-    { k: 'fish_btm_y', lb: '下分割线 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.fish_auto && (s.if_seam === 'double' || s.fish_mode === 'double' || s.fish_mode === 'triple') },
-    { k: 'seam_btm_linewidth', lb: '下横线宽', type: 'num', min: 0, max: 60, step: 1, unit: 'px', show: s => s.if_seam === 'double' },
-  ]},
-  { id: 'fish', title: '六、鱼尾（鱼身 + 尾 + 花饰）', open: 1, items: [
-    { k: 'fish_mode', lb: '鱼尾样式', type: 'sel', opts: [['none', '无'], ['single', '单鱼尾'], ['double', '双鱼尾'], ['triple', '三鱼尾']], tip: '三鱼尾 = 上(尖朝下) + 中(可调方向/位置) + 下(固定尖朝上)；双鱼尾下鱼尾固定尖朝上，方向不可调' },
-    { k: 'fish_shape', lb: '鱼尾形状', type: 'sel', opts: [['triangle', '三角'], ['arc', '弧形'], ['flower', '花瓣']] },
-    { k: 'fish_decor', lb: '鱼尾花饰', type: 'bool' },
-    { k: 'fish_top_rectheight', lb: '上鱼身高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode !== 'none' },
-    { k: 'fish_top_triaheight', lb: '上鱼尾高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode !== 'none' },
-    { k: 'fish_top_color', lb: '上鱼尾色', type: 'color', show: s => s.fish_mode !== 'none' },
-    { k: 'fish_btm_rectheight', lb: '下鱼身高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode === 'double' || s.fish_mode === 'triple' },
-    { k: 'fish_btm_triaheight', lb: '下鱼尾高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode === 'double' || s.fish_mode === 'triple' },
-    { k: 'fish_btm_color', lb: '下鱼尾色', type: 'color', show: s => s.fish_mode === 'double' || s.fish_mode === 'triple' },
-    { k: 'fish_mid_direction', lb: '中鱼尾朝向', type: 'sel', opts: [['0', '尖朝下'], ['1', '尖朝上']], show: s => s.fish_mode === 'triple', tip: '默认尖朝下（同上鱼尾）；翻成尖朝上即与下鱼尾同向' },
-    { k: 'fish_mid_pos', lb: '中鱼尾位置', type: 'num', min: 0, max: 1, step: 0.01, unit: '× 内容区高', show: s => s.fish_mode === 'triple', tip: '0 = 内容区顶，1 = 内容区底，默认 0.5 居中（上下鱼尾之间）' },
-    { k: 'fish_mid_rectheight', lb: '中鱼身高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode === 'triple' },
-    { k: 'fish_mid_triaheight', lb: '中鱼尾高', type: 'num', min: 0, max: 200, step: 2, unit: 'px', show: s => s.fish_mode === 'triple' },
-    { k: 'fish_mid_color', lb: '中鱼尾色', type: 'color', show: s => s.fish_mode === 'triple' },
-  ]},
-  { id: 'text', title: '七、行与正文', open: 1, items: [
-    { k: 'row_num', lb: '每列字数', type: 'num', min: 4, max: 80, step: 1, unit: '字' },
-    { k: 'row_start_auto', lb: '起始线自动', type: 'bool' },
-    { k: 'row_top_pad', lb: '起始留白', type: 'num', min: 0, max: 300, step: 5, unit: 'px', show: s => s.row_start_auto },
-    { k: 'row_start_y', lb: '行起始线 Y', type: 'num', min: 0, max: 3000, step: 5, unit: 'px', show: s => !s.row_start_auto },
-    { k: 'row_end_auto', lb: '结束线自动', type: 'bool' },
-    { k: 'row_delta_y', lb: '末字留白', type: 'num', min: 0, max: 300, step: 5, unit: 'px', show: s => s.row_end_auto },
-    { k: 'wrap_indent', lb: '回行缩进', type: 'seg', opts: [['0', '无'], ['1', '空1字'], ['2', '空2字']], tip: '段首（显式换列 br/章节/% $ &）顶格；回行（正文·强调·夹注自然溢出续列）列头空 N 字格。夹注续列同属溢出续列一并空 N。仅影响续列起始位置，不改字号、标点与末字留白' },
-    { k: 'row_end_y', lb: '行结束线 Y', type: 'num', min: 0, max: 3000, step: 5, unit: 'px', show: s => !s.row_end_auto },
-    { k: 'text_size_auto', lb: '字号自动', type: 'bool', tip: '字号 = 行高 ÷ (每列字数 × 字距比例)；字格恒锁 = 行高 ÷ 每列字数' },
-    { k: 'text_size_fitcol', lb: '字号受限列宽', type: 'bool', show: s => s.text_size_auto },
-    { k: 'text_col_ratio', lb: '字号/列宽上限', type: 'num', min: 0.5, max: 1.4, step: 0.01, unit: '×', show: s => s.text_size_auto && s.text_size_fitcol },
-    { k: 'text_font1_size', lb: '正文字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', show: s => !s.text_size_auto, tip: '手动档：字格恒锁 = 行高 ÷ 每列字数，字号本身即决定字的疏密（字号小 → 字间缝大）' },
-    { k: 'text_ydis', lb: '字距比例', type: 'num', min: 0.6, max: 2, step: 0.01, unit: '×', off: s => !s.text_size_auto, tip: '自动档：字格锁定（行高÷每列字数），本项只改字号 → 即字的疏密；手动档：字号自定，本项不生效（改「正文字号」即调疏密）' },
-    { k: 'text_font_family', lb: '正文字体', type: 'fam' },
-    { k: 'text_font_color', lb: '正文颜色', type: 'color' },
-  ]},
-  { id: 'comment', title: '八、夹注（双行小字）', open: 1, items: [
-    { k: 'comment_size_auto', lb: '字号自动', type: 'bool', tip: '夹注字号 =「规范正文字号」× 比例（规范字号 = 字距比例 1 时、字身恰好占满字格的字号）→ 调「字距比例」只改正文疏密，夹注块整体纹丝不动' },
-    { k: 'comment_size_ratio', lb: '字号比例', type: 'num', min: 0.2, max: 1, step: 0.01, unit: '×', show: s => s.comment_size_auto, tip: '夹注字号 ÷ 规范正文字号；夹注块占格 = ⌈行数 × 本比例⌉ 个正文字位（每两个字占一格）' },
-    { k: 'comment_font1_size', lb: '夹注字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', show: s => !s.comment_size_auto },
-    { k: 'comment_ydis', lb: '字距比例', type: 'num', min: 0.6, max: 2, step: 0.01, unit: '×', tip: '块内注字行距比例。夹注块占格与正文字距无关（已锁定），行距上限 = 块内均分高，故调大到 1× 以上行距不再增大' },
-    { k: 'comment_font_family', lb: '夹注字体', type: 'fam' },
-    { k: 'comment_font_color', lb: '夹注颜色', type: 'color' },
-  ]},
-  { id: 'center', title: '九、版心文字（书名 / 卷次 / 页码）', open: 0, items: [
-    { k: 'title_text', lb: '书名', type: 'text', tip: '版心书名。真源 = 项目信息里的「图书名称」（改这里即改项目书名，两处同步）；留空则按「项目名称」填充（新建向导/项目信息里那句「留空则使用项目名称」即此义），项目名称也为空时才显示占位「图书名称」，不会留白。单元作用域下改 = 只改本单元，清空即本单元版心不排书名' },
-    { k: 'title_postfix', lb: '卷次后缀', type: 'text', ph: '卷X，X 自动替换为卷号', tip: '正文卷已有分组名时按分组名显示，此项仅在无分组名（默认卷/导读附录）时兜底' },
-    { k: 'title_volnames', lb: '逐卷卷名', type: 'text', ph: '道经|德经，按卷序以 | 分隔', tip: '正文卷已有分组名时按分组名显示，此项仅作兜底' },
-    { k: 'if_tpcenter', lb: '书名居中', type: 'bool' },
-    { k: 'title_font_size', lb: '书名字号', type: 'num', min: 10, max: 200, step: 2, unit: 'px' },
-    { k: 'title_font_family', lb: '书名卷次字体', type: 'fam' },
-    { k: 'title_y_auto', lb: '书名 Y 自动', type: 'bool', tip: '勾选后书名 Y 按内容区比例（上内框 + 纵向 20%）落位，即上—中鱼尾之间；取消勾选可手填' },
-    { k: 'title_y', lb: '书名 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.title_y_auto },
-    { k: 'title_ydis', lb: '书名字距', type: 'num', min: 0.6, max: 2, step: 0.01, unit: '×' },
-    { k: 'title_color', lb: '书名颜色', type: 'color' },
-    { k: 'vol_y_auto', lb: '卷次 Y 自动', type: 'bool', tip: '勾选后卷次 Y 按内容区比例（上内框 + 纵向 62%）落位，即中—下鱼尾之间，独立于书名/页码；取消勾选可手填' },
-    { k: 'vol_y', lb: '卷次 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.vol_y_auto },
-    { k: 'pager_style', lb: '页码样式', type: 'sel', opts: [['cn', '中文数字'], ['arabic', '阿拉伯数字']] },
-    { k: 'pager_font_size', lb: '页码字号', type: 'num', min: 8, max: 120, step: 2, unit: 'px' },
-    { k: 'pager_font_family', lb: '页码字体', type: 'fam' },
-    { k: 'pager_y_auto', lb: '页码 Y 自动', type: 'bool', tip: '勾选后页码 Y 按内容区比例（上内框 + 纵向 70%）落位，即卷次下方；取消勾选可手填' },
-    { k: 'pager_y', lb: '页码 Y', type: 'num', min: 0, max: 3000, step: 10, unit: 'px', show: s => !s.pager_y_auto },
-    { k: 'pager_color', lb: '页码颜色', type: 'color' },
-  ]},
-  { id: 'punc', title: '十、标点处理', open: 0, items: [
-    { k: 'text_comma_mode', lb: '正文标点', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '全角占1位；悬空小字贴前字右下角不占位；句读=古籍圈点（，、；：→读点、。！？→句圈，恒按悬空不占格）；无=白文。此档只管正文行文，章节标题不受影响——章题标点恒整格原样' },
-    { k: 'text_comma_pos', lb: '正文标点位', type: 'seg', opts: [['right', '居右'], ['center', '居中']], tip: '居右=字格右侧、与上字自动留隙（默认）；居中=墨迹落字格中央' },
-    { k: 'text_comma_zhu', lb: '正文朱色', type: 'bool', tip: '套印本句读圈点：正文标点染朱色' },
-    { k: 'comment_comma_mode', lb: '夹注标点', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '悬空/句读：nop 贴前字角不占位，rot（「」（）类）占整格' },
-    { k: 'comment_comma_pos', lb: '夹注标点位', type: 'seg', opts: [['right', '居右'], ['center', '居中']], tip: '居右=注字格右侧、行距自适应留隙（默认）；居中=墨迹落注字格中央' },
-    { k: 'comment_comma_zhu', lb: '夹注朱色', type: 'bool' },
-    { k: 'comment_comma_fullwidth', lb: '夹注半角转全角', type: 'bool' },
-    { k: 'hang_scale', lb: '悬空·标点大小', type: 'num', min: 0.1, max: 1, step: 0.02, unit: '×', tip: '句读模式下同时作为「读点（、）」大小；也是夹注末字后小字标点（挤挂）的大小——夹注只在挤挂能省下正文字位时才挤挂。正文/强调的避头不走这里：闭号按「标点压缩」全尺寸排进列底余白（装不下才自动等比缩）' },
-    { k: 'jd_ring_scale', lb: '句读·句圈直径', type: 'num', min: 0.1, max: 1, step: 0.02, unit: '×' },
-    { k: 'jd_ring_stroke', lb: '句读·句圈线宽', type: 'num', min: 0, max: 0.2, step: 0.01, unit: '×', tip: '0 = 实心圈' },
-    { k: 'text_hang_x', lb: '正文悬空·横移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
-    { k: 'text_hang_y', lb: '正文悬空·纵移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
-    { k: 'comment_hang_x', lb: '夹注悬空·横移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
-    { k: 'comment_hang_y', lb: '夹注悬空·纵移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
-    { k: 'text_comma_color', lb: '标点颜色', type: 'color' },
-    { k: 'text_comma_nop', lb: '正文·不占位字符', type: 'text', tip: '如 ，、。：；！？ 等按悬空/句读模式贴前字角、不占整格的标点' },
-    { k: 'text_comma_90', lb: '正文·竖排标点字符', type: 'text', tip: '如 「」（）《》…— 等用字体竖排字形（vert）立起来的标点；闭号（》」）另受避头点保护不居列首——列满时按「标点压缩」排到末字之后、列底余白里，全尺寸（余白装不下才等比缩），不占列内格、不增列不增页。「无标点」模式下整组不渲染、不占格' },
-    { k: 'comment_comma_nop', lb: '夹注·不占位字符', type: 'text', tip: '同正文，作用于夹注内部' },
-    { k: 'comment_comma_90', lb: '夹注·竖排标点字符', type: 'text', tip: '同正文，作用于夹注内部' },
-  ]},
-  { id: 'chapter', title: '十一、章节标题（行首 # 标记）', open: 0, items: [
-    { k: 'chapter_font_color', lb: '标题颜色', type: 'color' },
-    { k: 'chapter_punct_90', lb: '章节标点竖排', type: 'bool', tip: '章节标点永远整格占位；开启则引号括号类使用字体竖排字形（vert）立起来' },
-    { k: 'chapter1_align', lb: '一级 # 对齐', type: 'sel', opts: ALIGN },
-    { k: 'chapter1_font_delta', lb: '一级 字号±', type: 'num', min: -200, max: 300, step: 1, unit: 'px', tip: '标题字号 = 正文字号 + 本值（px），各级同理。注音开启时与正文同比例缩；字号撞列宽上限后本值不再生效' },
-    { k: 'chapter1_font_family', lb: '一级 字体', type: 'fam' },
-    { k: 'chapter1_bold', lb: '一级 加粗', type: 'bool' },
-    { k: 'chapter2_align', lb: '二级 ## 对齐', type: 'sel', opts: ALIGN },
-    { k: 'chapter2_font_delta', lb: '二级 字号±', type: 'num', min: -200, max: 300, step: 1, unit: 'px' },
-    { k: 'chapter2_font_family', lb: '二级 字体', type: 'fam' },
-    { k: 'chapter2_bold', lb: '二级 加粗', type: 'bool' },
-    { k: 'chapter3_align', lb: '三级 ### 对齐', type: 'sel', opts: ALIGN },
-    { k: 'chapter3_font_delta', lb: '三级 字号±', type: 'num', min: -200, max: 300, step: 1, unit: 'px' },
-    { k: 'chapter3_font_family', lb: '三级 字体', type: 'fam' },
-    { k: 'chapter3_bold', lb: '三级 加粗', type: 'bool' },
-    { k: 'chapter4_align', lb: '四级 #### 对齐', type: 'sel', opts: ALIGN },
-    { k: 'chapter4_font_delta', lb: '四级 字号±', type: 'num', min: -200, max: 300, step: 1, unit: 'px' },
-    { k: 'chapter4_font_family', lb: '四级 字体', type: 'fam' },
-    { k: 'chapter4_bold', lb: '四级 加粗', type: 'bool' },
-  ]},
-  { id: 'badge', title: '十二、注释徽标（{} 标记）', open: 0, items: [
-    { k: 'badge_show', lb: '显示徽标', type: 'bool', tip: '关闭后正文与夹注中的 {徽标} 整体隐藏、不占位' },
-    { k: 'badge_color', lb: '徽标颜色', type: 'color', show: s => !!s.badge_show },
-    { k: 'badge_font_family', lb: '徽标字体', type: 'fam', tip: '仅作用于正文中的徽标；夹注内徽标始终随夹注字体', show: s => !!s.badge_show },
-    { k: 'badge_size', lb: '徽标字号', type: 'num', min: 0, max: 400, step: 1, unit: 'px', tip: '0 = 自动随正文字号；仅作用于正文中的徽标（按框高占多格），夹注内徽标始终随夹注字号', show: s => !!s.badge_show },
-    { k: 'badge_decor', lb: '花饰', type: 'bool', tip: '内细线 + 四角菱形花饰', show: s => !!s.badge_show },
-  ]},
-  { id: 'accent', title: '十三、强调样式（[] 标记）', open: 0, items: [
-    { k: 'accent_font_family', lb: '强调字体', type: 'fam', tip: '缺省 = 正文字体（[] 包裹内容默认同正文，字号 ×0.9）' },
-    { k: 'accent_font_size', lb: '强调字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', tip: '缺省 = 正文字号 × 0.9' },
-    { k: 'accent_font_color', lb: '强调颜色', type: 'color', tip: '缺省 = 正文颜色' },
-    { k: 'accent_letter_spacing', lb: '强调字距', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字', tip: '竖排下为字间纵向间隙，0 = 无' },
-    { k: 'accent_comma_mode', lb: '强调标点模式', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '缺省 = 跟随正文标点模式；可独立设置强调段标点' },
-    { k: 'accent_comma_color', lb: '强调标点颜色', type: 'color', tip: '缺省 = 强调颜色（与文字同色）；填朱色 #a8322a 即朱印标点' },
-    { k: 'accent_comma_nop', lb: '强调·不占位字符', type: 'text', tip: '缺省 = 与正文同字符集（、，。：；！？）' },
-    { k: 'accent_comma_90', lb: '强调·竖排标点字符', type: 'text', tip: '缺省 = 与正文同字符集（「」〔〕…（）类），使用字体竖排字形（vert）立起来' },
-    { k: 'accent_comma_fullwidth', lb: '强调半角转全角', type: 'bool', tip: '缺省 = 开启；将强调段内半角标点转全角' },
-  ]},
-  { id: 'ruby', title: '十四、注音（^拼音^ 标记）', open: 0, items: [
-    { k: 'ruby_show', lb: '注音', type: 'sel', opts: [[0, '关闭'], [1, '开启'], [2, '自动（全书有注音才缩字）']],
-      tip: '注音为横排小字，落在「字与字的空隙」里，不占字位、不改变列数/每列字数/分页/页码/目录。'
-        + '开启后正文字形会等比略缩以腾出呼吸；「自动」档 = 全书一处注音都没有时完全等同现状' },
-    { k: 'ruby_size_ratio', lb: '注音字号比', type: 'num', min: 0.05, max: 1, step: 0.01, unit: '×正文',
-      show: s => Number(s.ruby_show) !== 0,
-      tip: '注音字号 / 正文字号。0.18 最省字（@300dpi ≈3.7pt）；嫌小可调到 0.25~0.30（正文字形会相应多缩一点）' },
-    { k: 'ruby_gap', lb: '呼吸间距', type: 'num', min: 0, max: 40, step: 0.5, unit: 'px',
-      show: s => Number(s.ruby_show) !== 0,
-      tip: '注音与上下汉字的合计净空（按下方「纵向偏置」的比例分配）。'
-        + '调大 = 更疏朗，但正文字形会更小（2px 为默认的紧凑值）' },
-    { k: 'ruby_bias', lb: '纵向偏置', type: 'num', min: 0, max: 1, step: 0.05, unit: '',
-      show: s => Number(s.ruby_show) !== 0,
-      tip: '注音在字间空隙里的落位偏好。0 = 上下居中；1 = 注音盒底完全贴住下方本字的墨迹上沿。'
-        + '注音是注给「下方本字」的，故默认 0.3（上:下 ≈ 1.86:1，略偏本字）' },
-    { k: 'ruby_font_family', lb: '注音字体', type: 'fam', show: s => Number(s.ruby_show) !== 0,
-      tip: '默认西文衬线栈（Times New Roman / Georgia）；注音一律横排，不需要竖排字形' },
-    { k: 'ruby_color', lb: '注音颜色', type: 'color', show: s => Number(s.ruby_show) !== 0,
-      tip: '留空 = 跟随正文颜色' },
-    { k: 'tag_ruby', lb: '注音标记符', type: 'text',
-      tip: '成对的两个符号，默认 ^^ —— 正文写作 `字^pīn^`，注音挂在该字上方；夹注/强调内部不解析' },
-  ]},
-  { id: 'seamstamp', title: '十五、版心堂号（中缝图片）', open: 0, items: [
-    { k: 'seam_stamp_src', lb: '堂号图', type: 'asset',
-      tip: '从项目 assets/ 选图，盖在版心中缝上（与鱼尾、书名、页码并列），正文每叶都出现；留空 = 不输出。'
-        + '素材入库时 PNG 会自动裁掉四周透明边，避免「占叶宽百分比」与实际视觉不符' },
-    { k: 'seam_stamp_pos', lb: '纵向位置', type: 'num', min: 0, max: 1, step: 0.01,
-      show: s => !!s.seam_stamp_src,
-      tip: '在中缝上的位置：0 = 内容区顶，1 = 内容区底（默认 0.5 正中，此处没有鱼尾/书名/页码，不会撞）。'
-        + '可在预览里按住上下拖动 —— 这是唯一的可调方向，横向恒居中于中缝' },
-    { k: 'seam_stamp_w', lb: '宽度', type: 'num', min: 0.1, max: 1, step: 0.05, unit: '× 中缝宽',
-      show: s => !!s.seam_stamp_src,
-      tip: '占「中缝宽度」的比例（默认 0.6），中缝窄的模板自动缩小；高度按图片原始宽高比推导，不会变形' },
-    { k: 'seam_stamp_opacity', lb: '浓淡', type: 'num', min: 0.1, max: 1, step: 0.02,
-      show: s => !!s.seam_stamp_src, tip: '不透明白分比。0.9 接近实盖，调低更像淡印' },
-  ]},
-  { id: 'watermark', title: '十六、叶面水印（正文每叶）', open: 0, items: [
-    { k: 'watermark_src', lb: '水印图', type: 'asset',
-      tip: '盖在纸张上的图片，压在版框与文字之下，正文每叶都出现；留空 = 不输出。'
-        + '水印范围只含正文叶（封面/扉页/牌记/尾页不参与）' },
-    { k: 'watermark_x', lb: '横向位置', type: 'num', min: 0, max: 1, step: 0.01,
-      show: s => !!s.watermark_src, tip: '图心在纸张上的横向比例（0 = 左缘，1 = 右缘）；可在预览里拖动' },
-    { k: 'watermark_y', lb: '纵向位置', type: 'num', min: 0, max: 1, step: 0.01,
-      show: s => !!s.watermark_src, tip: '图心在纸张上的纵向比例（0 = 上缘，1 = 下缘）；可在预览里拖动' },
-    { k: 'watermark_w', lb: '宽度', type: 'num', min: 0.05, max: 2, step: 0.05, unit: '× 纸宽',
-      show: s => !!s.watermark_src, tip: '占纸张宽度的比例（默认 0.5）；高度按原图宽高比推导' },
-    { k: 'watermark_opacity', lb: '浓淡', type: 'num', min: 0.02, max: 1, step: 0.02,
-      show: s => !!s.watermark_src, tip: '默认 0.12 —— 淡到不夺正文，是水印该有的样子' },
-  ]},
+  gPaper, gFrame, gLeafSeam, gCenter,
+  gGrid, gBody, gComment, gAccent, gChapter, gBadge, gRuby,
+  gPunc, gSeamStamp, gWatermark,
+]
+
+/* ---------------- 4 簇聚类（渲染用） ---------------- */
+export const CLUSTERS: SchemaCluster[] = [
+  {
+    id: 'c1', title: '一 · 页面骨架', sub: '硬 · 几何（由外到内）', open: 1,
+    groups: [gPaper, gFrame, gLeafSeam, gCenter],
+  },
+  {
+    id: 'c2', title: '二 · 文字与标注', sub: '软 · 内容样式', open: 0,
+    groups: [gGrid, gBody, gComment, gAccent, gChapter, gBadge, gRuby],
+  },
+  {
+    id: 'c3', title: '三 · 标点机制', sub: '软 · 共享规则（统一收口）', open: 0,
+    groups: [gPunc],
+  },
+  {
+    id: 'c4', title: '四 · 叠加装饰', sub: '最软 · 覆盖层', open: 0,
+    groups: [gSeamStamp, gWatermark],
+  },
 ]
