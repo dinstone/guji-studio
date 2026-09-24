@@ -6,7 +6,7 @@ import {
 } from '../core/papersize'
 import {
   tplEdit, tplScope, tplOverridden, tplRevert, tplOverrideCount, tplRevertAll,
-  proj, view, importTplFromBook, curBlockName, projectDir,
+  proj, view, importTplFromBook, curBlockName, projectDir, bookTitle, openProjectInfo,
 } from '../stores/app'
 import { ensureAsset } from '../core/assets'
 import { importImage } from '../platform/wails'
@@ -213,6 +213,14 @@ const paperHint = computed(() => {
                       >{{ o[1] }}</button>
                     </div>
                   </template>
+                  <!-- 书名（title_text）书级只读：真源在项目信息·图书名称，此处只显示生效值
+                       （图书名称→项目名称→占位 三级回落），防止在面板清空把元信息冲掉；
+                       单元作用域仍走普通文本框（覆盖 = 只改本单元，清空 = 本单元不排书名） -->
+                  <template v-else-if="it.type === 'text' && it.roBook && !unit">
+                    <input :value="bookTitle()" type="text" readonly class="ro"
+                           title="书名真源 = 项目信息·图书名称；留空按「项目名称」回落显示。请到项目信息中修改">
+                    <button class="jro" title="打开项目信息修改图书名称" @click="openProjectInfo">项目信息</button>
+                  </template>
                   <template v-else-if="it.type === 'text'">
                     <input v-model="tplEdit[it.k]" type="text" :placeholder="it.ph">
                   </template>
@@ -289,6 +297,10 @@ const paperHint = computed(() => {
 .row.off .ctl { opacity: .42; pointer-events: none; }
 .row.off .lb { color: #a5a39c; }
 .ctl input[type="number"], .ctl input[type="text"], .ctl select { width: 100%; max-width: 100%; min-width: 0; font-size: 12px; padding: 1px 4px; }
+/* 书名只读投影 + 跳转按钮（书级作用域） */
+.ctl input.ro { background: #f3f1ea; color: #55534d; cursor: default; }
+.jro { flex: none; border: 0.5px solid #d3d1c7; background: #fff; border-radius: 4px; font-size: 11px; padding: 1px 7px; cursor: pointer; color: #55534d; }
+.jro:hover { border-color: #0f6e56; color: #0f6e56; }
 .unit { color: #888780; font-size: 11px; flex: none; }
 .color { width: 26px; height: 20px; padding: 0; border: 0.5px solid #d3d1c7; background: none; }
 /* 图片素材：选图按钮 + 文件名（长名省略，title 看全名）+ 清除 */

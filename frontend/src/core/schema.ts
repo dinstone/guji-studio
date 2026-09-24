@@ -28,6 +28,8 @@ export interface SchemaItem {
   off?: (s: Record<string, any>) => boolean
   /* link：bool 开关不直接存储，而是联动写入另一字段（onval 开启值，关闭=''）；与 text 字段双向同步 */
   link?: string; onval?: string
+  /* roBook：书级作用域下只读（防误清真源），仅单元作用域可编辑。目前只有书名（title_text）用 */
+  roBook?: 1
 }
 export interface SchemaGroup { id: string; title: string; open: number; items: SchemaItem[] }
 export interface SchemaCluster { id: string; title: string; open: number; groups: SchemaGroup[] }
@@ -110,7 +112,7 @@ const gFish: SchemaGroup = { id: 'fish', title: '鱼尾（锚定分割线）', o
 
 /* 四·版心文字：书名 / 卷次 / 页码 */
 const gCenter: SchemaGroup = { id: 'center', title: '版心文字（书名 / 卷次 / 页码）', open: 0, items: [
-  { k: 'title_text', lb: '书名', type: 'text', tip: '版心书名。真源 = 项目信息里的「图书名称」（改这里即改项目书名，两处同步）；留空则按「项目名称」填充（新建向导/项目信息里那句「留空则使用项目名称」即此义），项目名称也为空时才显示占位「图书名称」，不会留白。单元作用域下改 = 只改本单元，清空即本单元版心不排书名' },
+  { k: 'title_text', lb: '书名', type: 'text', roBook: 1, tip: '书级只读：真源 = 项目信息里的「图书名称」（点「项目信息」去改）；留空按「项目名称」回落显示，项目名称也为空时显示占位「图书名称」。此处清空不会再冲掉项目元信息（2026-09-24 用户定）。单元作用域下仍可覆盖 = 只改本单元版心书名，清空即本单元版心不排书名（目录用的就是这条）' },
   { k: 'title_postfix', lb: '卷次后缀', type: 'text', ph: '卷X，X 自动替换为卷号', tip: '正文卷已有分组名时按分组名显示，此项仅在无分组名（默认卷/导读附录）时兜底' },
   { k: 'title_volnames', lb: '逐卷卷名', type: 'text', ph: '道经|德经，按卷序以 | 分隔', tip: '正文卷已有分组名时按分组名显示，此项仅作兜底' },
   { k: 'if_tpcenter', lb: '书名居中', type: 'bool' },
