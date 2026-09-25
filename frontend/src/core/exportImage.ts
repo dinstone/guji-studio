@@ -37,22 +37,54 @@ export async function embedImages(svg: string): Promise<string> {
 /* 内联字体后，等字体解码落定的毫秒数（见下方 drawImage 处的重绘）。 */
 const FONT_SETTLE_MS = 30
 
+/* ============ 光栅化性能统计 ============
+ * 每叶逐段计时并留档，供导出面板显示与控制台核对。
+ * 关键对照点：**首叶的 fonts 段含「首次去后端取字体二进制」的 IPC 开销**，
+ * 后续叶应显著更短——若不是，说明 binCache/faceCache 没生效，那是 bug 而非体积问题。
+ * 想看控制台明细时，把 localStorage.guji.exportProfile 置 '1'。 */
+export interface LeafProfile {
+  label: string
+  total: number
+  svgIn: number   // 内联前 SVG 字符数
+  svgOut: number  // 内联后 SVG 字符数
+  stages: Record<string, number>
+}
+const PROF_KEY = 'guji.exportProfile'
+let profiles: LeafProfile[] = []
+export function resetProfiles(): void { profiles = [] }
+export function getProfiles(): LeafProfile[] { return profiles }
+export function profileOn(): boolean { try { return localStorage.getItem(PROF_KEY) === '1' } catch { return false } }
+const MB = (n: number) => (n / 1024 / 1024).toFixed(2) + 'MB'
+
 export async function rasterizeSvg(svg: string, W: number, H: number, label = ''): Promise<Blob> {
   /* 先内联纹理再内联字体：字体 @font-face 会把 SVG 撑大，放在纹理之后可让两者的字符串替换互不干扰。
    * 少了 embedFonts，SVG 作为独立图片文档拿不到自定义字体，会整体回退系统宋体
    * （竖排标点变弯引号、正文笔画变样）。 */
-  const finalSvg = await embedFonts(await embedImages(svg))
+  const st: Record<string, number> = {}
+  const t0 = performance.now()
+  let tick = t0
+  const mark = (k: string) => { st[k] = +(performance.now() - tick).toFixed(1); tick = performance.now() }
+  const svgIn = svg.length
+
+  const texed = await embedImages(svg)
+  mark('images')
+  const finalSvg = await embedFonts(texed)
+  mark('fonts')
+  const svgOut = finalSvg.length
   const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(finalSvg)
+  mark('encode')
   const img = new Image()
   await new Promise<void>((ok, bad) => {
     img.onload = () => ok()
     img.onerror = () => bad(new Error(`第 ${label || '?'} 叶 SVG 解析失败（字体/引号未转义会产生非法 XML）`))
     img.src = url
   })
+  mark('decode')
   const cv = document.createElement('canvas')
   cv.width = W; cv.height = H
   const g = cv.getContext('2d')!
   g.drawImage(img, 0, 0, W, H)
+  mark('paint')
   /* @font-face 是**异步解码**的：img.onload 只保证 SVG 可绘制，不保证字体已就绪。
    * 此刻 drawImage 会把字画成 fallback 字形，等 fonts 落定后清屏重绘一次，
    * 避免导出结果随时序漂移（同一份模板两次导出长得不一样）。 */
@@ -61,9 +93,27 @@ export async function rasterizeSvg(svg: string, W: number, H: number, label = ''
     g.clearRect(0, 0, W, H)
     g.drawImage(img, 0, 0, W, H)
   }
+  mark('settle')
   const blob: Blob | null = await new Promise(ok => cv.toBlob(ok, 'image/png'))
+  mark('png')
+  profiles.push({ label, total: +(performance.now() - t0).toFixed(1), svgIn, svgOut, stages: st })
   if (!blob) throw new Error(`第 ${label || '?'} 叶光栅失败（画布可能过大）`)
   return blob
+}
+
+/** 导出完成后打一份人能读的性能汇总（仅开关打开时）。 */
+export function logProfileSummary(kind: string): void {
+  if (!profileOn() || !profiles.length) return
+  const total = profiles.reduce((a, p) => a + p.total, 0)
+  const grow = profiles.reduce((a, p) => a + Math.max(0, p.svgOut - p.svgIn), 0)
+  console.info(`[导出性能] ${kind} · ${profiles.length} 叶 · 光栅总 ${(total / 1000).toFixed(1)}s`)
+  for (const p of profiles.slice(0, 3)) {
+    const s = p.stages
+    /* settle 段含 FONT_SETTLE_MS 的强制等待，是固定成本不是开销所在。 */
+    console.info(`  ${p.label}: 总 ${p.total}ms | 内联 ${s.images ?? 0}/${s.fonts ?? 0}ms | 编码 ${s.encode ?? 0}/${s.decode ?? 0}ms` +
+      ` | 绘制 ${s.paint ?? 0}/(+${FONT_SETTLE_MS})${(s.png ?? 0)}ms | SVG ${MB(p.svgIn)} → ${MB(p.svgOut)}`)
+  }
+  console.info(`  内联使每叶平均膨胀 ${MB(grow / profiles.length)}，光栅合计 ${(total / 1000).toFixed(1)}s`)
 }
 
 function toB64(bytes: Uint8Array): Promise<string> {

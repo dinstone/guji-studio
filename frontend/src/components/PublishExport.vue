@@ -11,7 +11,7 @@ import { appConfirm } from '../stores/dialog'
 import * as plat from '../platform/wails'
 import { ensureAssets } from '../core/assets'
 import { renderSpread } from '../core/special'
-import { rasterizeSvg, saveBlobToOutput } from '../core/exportImage'
+import { rasterizeSvg, saveBlobToOutput, resetProfiles, getProfiles, logProfileSummary } from '../core/exportImage'
 import PubGroupEditor from './PubGroupEditor.vue'
 
 const E = LayoutEngine
@@ -70,6 +70,8 @@ interface Spread { label: string; svg: string; W: number; H: number }
 const includeSpecial = ref(true)
 const exporting = ref(false)
 const lastOutputDir = ref('')
+/* 导出性能统计：光栅合计耗时 + 字体内联带来的每叶膨胀。看数字要不要上子集化，就以这一行为准。 */
+const expStat = ref('')
 
 /* 导出弹窗：进度 + 文件名 + 常驻赞赏码。done 态不自动关闭，保证赞赏码被看到 */
 const done = ref(false)
@@ -214,6 +216,14 @@ watch(includeSpecial, () => {
   }
 })
 
+/* 性能统计文案：只统计光栅化（不含 PDF 拼装与落盘），免得把子集化的收益算到别处头上。 */
+function statText(ms: number): string {
+  const ps = getProfiles()
+  if (!ps.length) return ''
+  const grow = ps.reduce((a, p) => a + Math.max(0, p.svgOut - p.svgIn), 0) / ps.length
+  return `光栅 ${(ms / 1000).toFixed(1)}s · ${ps.length} 叶 · 每叶内联增加 ${(grow / 1024 / 1024).toFixed(2)}MB`
+}
+
 function stamp() { const d = new Date(); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` }
 function bookFileName() { return `${(proj.meta.title || proj.name || 'guji')}-${stamp()}.pdf` }
 function pubFileName(p: any) { return `${p.title}-${stamp()}.pdf` }
@@ -223,9 +233,10 @@ function selStem(): string { return sel.value !== null && sel.value >= 0 ? proj.
 async function exportPDF() {
   if (sel.value === null) { toast('请先在左侧选择整书合并或某个分册'); return }
   if (!expCount.value) { toast('当前选择没有可导出的内容'); return }
-  exporting.value = true; lastOutputDir.value = ''
+  exporting.value = true; lastOutputDir.value = ''; expStat.value = ''
   done.value = false; expErr.value = null
   expName.value = selPdfName(); expTotal.value = expCount.value; expCur.value = 0
+  resetProfiles()
   try {
     await warmAssets()
     const plan = planSpreads(sel.value)   // 预热后重新取：特殊页 <image> 此时才进 SVG
@@ -233,6 +244,7 @@ async function exportPDF() {
     expTotal.value = total
     const { PDFDocument } = await import('pdf-lib')
     const doc = await PDFDocument.create()
+    const t0 = performance.now()
     for (let i = 0; i < total; i++) {
       const leaf = plan[i]
       const blob = await rasterizeSvg(renderLeaf(leaf), leaf.W, leaf.H, leaf.label)
@@ -242,6 +254,8 @@ async function exportPDF() {
       page.drawImage(img, { x: 0, y: 0, width: pw, height: ph })
       expCur.value = i + 1
     }
+    expStat.value = statText(performance.now() - t0)
+    logProfileSummary('PDF')
     const bytes = await doc.save()
     const od = await saveBlobToOutput(projectDir.value, selPdfName(), new Blob([bytes as any], { type: 'application/pdf' }))
     lastOutputDir.value = od
@@ -264,15 +278,17 @@ async function openOutput() {
 async function exportPNG() {
   if (sel.value === null) { toast('请先在左侧选择整书合并或某个分册'); return }
   if (!expCount.value) { toast('当前选择没有可导出的内容'); return }
-  exporting.value = true; lastOutputDir.value = ''
+  exporting.value = true; lastOutputDir.value = ''; expStat.value = ''
   done.value = false; expErr.value = null
   expName.value = `${selStem()}-*.png`; expTotal.value = expCount.value; expCur.value = 0
+  resetProfiles()
   try {
     await warmAssets()
     const plan = planSpreads(sel.value)   // 预热后重新取：特殊页 <image> 此时才进 SVG
     const total = plan.length
     expTotal.value = total
     let od = ''
+    const t0 = performance.now()
     for (let i = 0; i < total; i++) {
       const leaf = plan[i]
       const blob = await rasterizeSvg(renderLeaf(leaf), leaf.W, leaf.H, leaf.label)
@@ -281,6 +297,8 @@ async function exportPNG() {
       od = await saveBlobToOutput(projectDir.value, name, new Blob([buf as any]))
       expCur.value = i + 1
     }
+    expStat.value = statText(performance.now() - t0)
+    logProfileSummary('PNG')
     lastOutputDir.value = od
     done.value = true
   } catch (e: any) {
@@ -403,6 +421,7 @@ async function exportPNG() {
         <div v-else-if="expErr" class="exp-err">{{ expErr }}</div>
         <div v-else class="exp-ok">
           已保存到：<span class="exp-path">{{ lastOutputDir }}</span>
+          <div v-if="expStat" class="exp-stat">{{ expStat }}</div>
         </div>
 
         <div class="exp-wx-wrap">
@@ -488,6 +507,7 @@ figcaption { font-size: 11px; color: #888780; margin-top: 6px; line-height: 1.4;
 .exp-ok { font-size: 12px; color: #0f6e56; margin: 10px 0 0; word-break: break-all; }
 .exp-path { color: #6b6a63; }
 .exp-err { font-size: 12px; color: #b05a4a; margin: 10px 0 0; word-break: break-all; }
+.exp-stat { font-size: 11px; color: #9a978c; margin-top: 7px; letter-spacing: .2px; }
 .exp-wx-wrap { margin-top: 16px; display: flex; flex-direction: column; align-items: center; }
 .exp-wx { display: block; width: 160px; border-radius: 8px; border: 0.5px solid #e2dfd4; }
 .exp-wx-tip { font-size: 12px; color: #6b6a63; margin: 8px 0 0; }
