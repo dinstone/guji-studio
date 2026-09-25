@@ -2,6 +2,7 @@
  * 逻辑与 ExportPanel 原实现一致，抽出为单一来源，避免两边各维护一份。 */
 
 import * as plat from '../platform/wails'
+import { embedFonts } from './fontEmbed'
 
 /* 纹理内联：SVG 以 data:URL 经 new Image() 光栅化时，相对路径（如 textures/xuan.jpg）加载不出来，
  * 这里把每个 <image href="相对路径"> 拉取并内联为 data-URI。同一路径按会话缓存，避免整书多页重复拉取。 */
@@ -33,8 +34,14 @@ export async function embedImages(svg: string): Promise<string> {
   return svg
 }
 
+/* 内联字体后，等字体解码落定的毫秒数（见下方 drawImage 处的重绘）。 */
+const FONT_SETTLE_MS = 30
+
 export async function rasterizeSvg(svg: string, W: number, H: number, label = ''): Promise<Blob> {
-  const finalSvg = await embedImages(svg)
+  /* 先内联纹理再内联字体：字体 @font-face 会把 SVG 撑大，放在纹理之后可让两者的字符串替换互不干扰。
+   * 少了 embedFonts，SVG 作为独立图片文档拿不到自定义字体，会整体回退系统宋体
+   * （竖排标点变弯引号、正文笔画变样）。 */
+  const finalSvg = await embedFonts(await embedImages(svg))
   const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(finalSvg)
   const img = new Image()
   await new Promise<void>((ok, bad) => {
@@ -44,7 +51,16 @@ export async function rasterizeSvg(svg: string, W: number, H: number, label = ''
   })
   const cv = document.createElement('canvas')
   cv.width = W; cv.height = H
-  cv.getContext('2d')!.drawImage(img, 0, 0, W, H)
+  const g = cv.getContext('2d')!
+  g.drawImage(img, 0, 0, W, H)
+  /* @font-face 是**异步解码**的：img.onload 只保证 SVG 可绘制，不保证字体已就绪。
+   * 此刻 drawImage 会把字画成 fallback 字形，等 fonts 落定后清屏重绘一次，
+   * 避免导出结果随时序漂移（同一份模板两次导出长得不一样）。 */
+  if (finalSvg.includes('@font-face')) {
+    await new Promise<void>(r => setTimeout(r, FONT_SETTLE_MS))
+    g.clearRect(0, 0, W, H)
+    g.drawImage(img, 0, 0, W, H)
+  }
   const blob: Blob | null = await new Promise(ok => cv.toBlob(ok, 'image/png'))
   if (!blob) throw new Error(`第 ${label || '?'} 叶光栅失败（画布可能过大）`)
   return blob

@@ -136,6 +136,20 @@ export interface FontInfo {
 export async function listFonts(): Promise<FontInfo[]> {
   return (FontSvc as any).List()
 }
+/* 导出时把字体二进制内联进 SVG：OpenFont 先定位并分块描述，再逐块取回来。
+ * 图片文档里的 SVG 拿不到宿主 @font-face，不内联会回退系统宋体。 */
+export interface FontBlob {
+  family: string
+  size: number
+  chunkSize: number
+  chunks: number
+}
+export async function openFont(family: string): Promise<FontBlob> {
+  return (FontSvc as any).OpenFont(family)
+}
+export async function readFontChunk(family: string, i: number): Promise<string> {
+  return (FontSvc as any).ReadFontChunk(family, i)
+}
 
 /* ---- 版式模板库 ---- */
 export async function seedTemplates(items: TplEntryFull[]): Promise<boolean> {
