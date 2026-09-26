@@ -2,7 +2,7 @@
  * 逻辑与 ExportPanel 原实现一致，抽出为单一来源，避免两边各维护一份。 */
 
 import * as plat from '../platform/wails'
-import { embedFonts, probeFonts } from './fontEmbed'
+import { embedFonts, probeFonts, unaliasOf as unaliasFamily } from './fontEmbed'
 
 /* 纹理内联：SVG 以 data:URL 经 new Image() 光栅化时，相对路径（如 textures/xuan.jpg）加载不出来，
  * 这里把每个 <image href="相对路径"> 拉取并内联为 data-URI。同一路径按会话缓存，避免整书多页重复拉取。 */
@@ -47,8 +47,79 @@ export async function embedImages(svg: string): Promise<string> {
  * <text> 本来就少，稀疏是正常的，不该触发补画。 */
 const INK_MIN = 3.0            // 墨迹覆盖率下限（%），1/8 缩略图口径
 const INK_CHECK_MIN_TEXTS = 30 // 少于这么多 <text> 的页不做墨迹判据
-const RETRY_ROUNDS = 3         // 每叶最多画几轮（首轮达标即停，正常页无额外成本）
+const RETRY_ROUNDS = 4         // 每叶最多画几轮（首轮达标即停，正常页无额外成本；
+                               // 多留一轮给「冷字体首次解码」——实测它要几百毫秒才就绪）
 const RETRY_WAIT_MS = 90       // 第 n 轮前等 n×90ms
+
+/* ---- 按族抽样的墨迹判据 ----
+ * 整页墨迹有盲区：**某一族字体没就绪时，其余族照样把整页墨迹顶过 INK_MIN**，补画循环
+ * 提前 break，那一族就永远没机会重画。实测真踩过：首叶夹注 285/299 个落点全空、
+ * 正文/注音全正常，整页墨迹照样过线——因为封面/扉页先用标题字体把它「晒热」了，
+ * 夹注字体是首个内容叶才第一次进图片文档，还没解码完就被画了。
+ * 所以除整页墨迹外，还要按 font-family 分组抽样各族的落点墨迹，抓「整族没画出来」。 */
+const FAM_SAMPLE_MAX = 12  // 每族最多抽几个落点（均匀取，避免全堆页首）
+const FAM_MIN_SAMPLES = 6  // 少于这个数的族不判（样本太少，个别落点落空是正常噪声）
+const FAM_INKED_RATIO = 0.2 // 有墨落点占比低于它判「整族缺失」
+
+interface FamSample { fam: string; pts: { x: number; y: number; fs: number }[] }
+
+const numAttr = (a: string, k: string): number | null => {
+  const m = new RegExp(`\\b${k}="([-"\\d.]+)"`).exec(a)
+  return m ? +m[1] : null
+}
+
+/** 从（已内联的）SVG 里按 font-family 首项分组收集 <text> 落点，每族均匀抽样。
+ *  族名可能是 XML 属性（font-family="A,B"）也可能是 style 声明（font-family:'A,B';），两种都要接。 */
+/** 按 font-family 首项分组收集 <text> 落点并均匀抽样（导出仅供回归探针 probe-ink-by-family.mjs）。 */
+export function familySamples(svg: string): FamSample[] {
+  const map = new Map<string, { x: number; y: number; fs: number }[]>()
+  for (const m of svg.matchAll(/<text\b([^>]*)>([^<]*)<\/text>/g)) {
+    const a = m[1]
+    if (!m[2].trim()) continue
+    const x = numAttr(a, 'x'), y = numAttr(a, 'y'), fs = numAttr(a, 'font-size')
+    if (x == null || y == null || fs == null) continue
+    const raw = (/font-family=(["'])([\s\S]*?)\1/.exec(a)?.[2]
+      ?? /font-family:\s*([^;"]*)/.exec(a)?.[1]) ?? ''
+    const fam = raw.split(',')[0]?.trim().replace(/^['"]|['"]$/g, '') ?? ''
+    if (!fam) continue
+    const arr = map.get(fam) ?? []
+    arr.push({ x, y, fs })
+    map.set(fam, arr)
+  }
+  return [...map].map(([fam, pts]) => {
+    if (pts.length <= FAM_SAMPLE_MAX) return { fam, pts }
+    const step = pts.length / FAM_SAMPLE_MAX
+    return { fam, pts: Array.from({ length: FAM_SAMPLE_MAX }, (_, i) => pts[Math.floor(i * step)]) }
+  })
+}
+
+/** 在已绘制的画布上量各族的落点墨迹，返回「整族没画出来」的族名（已去 GujiEmbed- 别名）。
+ *  只看落点占比、不看整页：夹注字号小、落点稀，整页口径下完全被正文淹没。 */
+export function blankFamilies(cv: HTMLCanvasElement, samples: FamSample[]): string[] {
+  const g = cv.getContext('2d')
+  if (!g) return []
+  const out: string[] = []
+  for (const s of samples) {
+    if (s.pts.length < FAM_MIN_SAMPLES) continue
+    let inked = 0
+    for (const p of s.pts) {
+      const hw = Math.max(2, p.fs * 0.6)
+      const x = Math.max(0, Math.round(p.x - hw)), y = Math.max(0, Math.round(p.y - hw))
+      const w = Math.min(cv.width - x, Math.round(hw * 2)), h = Math.min(cv.height - y, Math.round(hw * 2))
+      if (w <= 0 || h <= 0) { inked++; continue }   // 落点出界不计入，别冤枉这一族
+      try {
+        const d = g.getImageData(x, y, w, h).data
+        let dark = 0
+        for (let i = 0; i < d.length; i += 4) {
+          if ((d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 < 140) dark++
+        }
+        if (dark / (w * h) * 100 >= 0.5) inked++
+      } catch { inked++ }                             // 取不到像素时不冤枉
+    }
+    if (inked / s.pts.length < FAM_INKED_RATIO) out.push(unaliasFamily(s.fam))
+  }
+  return out
+}
 
 /** 用 1/8 缩略图统计墨迹覆盖率（%）。回读像素只有整幅的 1/64，成本可忽略。
  *  取不到像素返回 null——此时不做判据，保留首轮结果。 */
@@ -87,6 +158,8 @@ export interface LeafProfile {
   svgOut: number  // 内联后 SVG 字符数
   rounds: number  // 实际画了几轮（>1 说明补画过，即首轮没把正文画出来）
   ink: number     // 最终墨迹覆盖率（%，-1 = 未做判据）
+  blankFams: string[] // **整族没画出来**的字体（已去别名）。整页墨迹抓不到它——
+                      // 夹注那族全空时正文照样把整页墨迹顶过线。UI 要按族名提示。
   probeUnproven: boolean // 字体探针没能在多轮内证实「内联字体在这个图片文档里可用」——
                          // **正常现象，不是失败**（图片文档里无法查询字体就绪状态，WebKit 还会
                          // 缓存同 URL 的解析结果）。仅供性能排查看，不得据此告警：见 fontEmbed.ts
@@ -127,9 +200,13 @@ export async function rasterizeSvg(svg: string, W: number, H: number, label = ''
   const g = cv.getContext('2d')!
   const dense = (finalSvg.match(/<text\b/g) || []).length >= INK_CHECK_MIN_TEXTS
   const checkInk = finalSvg.includes('@font-face') && dense
+  /* 按族抽样只在「有内联声明且文字够密」的页上做，与整页墨迹判据同门槛。
+   * 预解析一次（重试各轮复用同一份落点），别在循环里反复正则扫 1MB 的 SVG。 */
+  const famSamples = checkInk ? familySamples(finalSvg) : []
 
   let rounds = 0
   let ink = -1
+  let blank: string[] = []
   for (let i = 0; i < RETRY_ROUNDS; i++) {
     rounds = i + 1
     if (i) await new Promise<void>(r => setTimeout(r, RETRY_WAIT_MS * i))
@@ -148,27 +225,36 @@ export async function rasterizeSvg(svg: string, W: number, H: number, label = ''
     const c = inkCoverage(cv, W, H)
     if (c == null) break
     ink = c
-    if (c >= INK_MIN) break // 正文已经画出来了
+    /* 整页墨迹过线**不等于**全部字体都画出来了：还要看有没有整族缺失（见 blankFamilies）。
+     * 缺这一条，首叶的夹注就会在「正文墨迹达标」下被提前放行，永远等不到重画。 */
+    blank = blankFamilies(cv, famSamples)
+    if (c >= INK_MIN && !blank.length) break
     if (i + 1 < RETRY_ROUNDS) st.retry = (st.retry ?? 0) + 1
   }
   mark('paint')
 
-  if (checkInk && ink >= 0 && ink < INK_MIN) {
-    /* 补画到底也没画出来：不静默交白卷，明确留痕（导出汇总里会统计）。 */
-    console.warn(`[导出] 第 ${label || '?'} 叶疑似缺字：墨迹 ${ink.toFixed(1)}% < ${INK_MIN}%（已补画 ${rounds} 轮）`)
+  if (checkInk && ((ink >= 0 && ink < INK_MIN) || blank.length)) {
+    /* 补画到底也没救回来：不静默交白卷，明确留痕（导出汇总里会统计）。
+     * 有整族缺失时必须点名族名——「墨迹 X%」这种整页数字对定位毫无帮助。 */
+    console.warn(`[导出] 第 ${label || '?'} 叶缺字：` +
+      (ink >= 0 ? `整页墨迹 ${ink.toFixed(1)}%（阈值 ${INK_MIN}%）` : '墨迹判据不可用') +
+      (blank.length ? `；以下字体整族没画出来：${blank.join('、')}` : '') +
+      `（已补画 ${rounds} 轮）`)
   }
 
   const blob: Blob | null = await new Promise(ok => cv.toBlob(ok, 'image/png'))
   mark('png')
-  profiles.push({ label, total: +(performance.now() - t0).toFixed(1), svgIn, svgOut, rounds, ink: +ink.toFixed(1), probeUnproven: !probeOk, stages: st })
+  profiles.push({ label, total: +(performance.now() - t0).toFixed(1), svgIn, svgOut, rounds, ink: +ink.toFixed(1), blankFams: blank, probeUnproven: !probeOk, stages: st })
   if (!blob) throw new Error(`第 ${label || '?'} 叶光栅失败（画布可能过大）`)
   return blob
 }
 
 /** 光栅后「补画兜底也没救回来」的叶。UI 要拿它提示用户，故导出——
- *  桌面端没有 devtools，console.warn 那一行用户根本看不见。 */
+ *  桌面端没有 devtools，console.warn 那一行用户根本看不见。
+ *  两种都算：整页墨迹不达标的（整片空白），以及整页墨迹达标但**某一族整族缺失**的
+ *（局部缺字——正是整页口径漏掉的那类）。 */
 export function suspectLeaves(): LeafProfile[] {
-  return profiles.filter(p => p.ink >= 0 && p.ink < INK_MIN)
+  return profiles.filter(p => (p.ink >= 0 && p.ink < INK_MIN) || (p.blankFams?.length ?? 0) > 0)
 }
 
 /** 导出完成后打一份人能读的性能汇总（仅开关打开时）。 */

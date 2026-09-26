@@ -12,7 +12,7 @@ import * as plat from '../platform/wails'
 import { ensureAssets } from '../core/assets'
 import { renderSpread } from '../core/special'
 import { rasterizeSvg, saveBlobToOutput, resetProfiles, getProfiles, logProfileSummary, suspectLeaves } from '../core/exportImage'
-import { failedFamilies } from '../core/fontEmbed'
+import { failedFamilies, beginFontSession, primeCodepoints } from '../core/fontEmbed'
 import PubGroupEditor from './PubGroupEditor.vue'
 
 const E = LayoutEngine
@@ -217,6 +217,28 @@ watch(includeSpecial, () => {
   }
 })
 
+/* 全书字符集（宁多勿少）：导出前交给字体子集器预热，让首次裁剪一次到位。
+ * 引擎会自行生成一些不在正文里的字（页码的汉字数字、卷次、书名、卷名、特殊页文字……），
+ * 故再补一段固定超集。漏掉的字符仍有逐叶扫描兜底（fontEmbed.ts 的 noteCodepoints 会在
+ * 该叶内联前把它并进来并触发重裁），这里只求少触发几次重裁——多带字形只是子集大一点。 */
+function bookChars(): string {
+  const out: string[] = []
+  const push = (s: unknown) => { if (typeof s === 'string' && s) out.push(s) }
+  push(proj.name); push((proj as any).meta?.title); push((proj as any).meta?.author)
+  for (const v of proj.tree.scrolls) { push(v.name); push(unitFlowText(v)) }
+  for (const g of proj.tree.guide) { push(g.name); push(unitFlowText(g)) }
+  for (const a of proj.tree.appendix) { push(a.name); push(unitFlowText(a)) }
+  for (const p of proj.pubs) push(p.title)
+  const sp = (proj as any).special || {}
+  for (const k of ['coverTitle', 'coverAuthor', 'imprint', 'volLabel']) push(sp[k])
+  for (const k of ['title_text', 'title_volnames', 'title_postfix']) push((tpl as any)[k])
+  /* 固定超集：数字（阿拉伯 + 全角 + 汉字）、常用标点、书页常见字 */
+  push('0123456789０１２３４５６７８９〇零一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾')
+  push('、，。：；！？「」『』〔〕…—（）()“”‘’《》〈〉·‧　')
+  push('页卷第回目章上下册前序跋凡例重刊编注音首')
+  return out.join('')
+}
+
 /* 性能统计文案：只统计光栅化（不含 PDF 拼装与落盘），免得把子集化的收益算到别处头上。 */
 function statText(ms: number): string {
   const ps = getProfiles()
@@ -224,6 +246,8 @@ function statText(ms: number): string {
   const grow = ps.reduce((a, p) => a + Math.max(0, p.svgOut - p.svgIn), 0) / ps.length
   /* 缺字页必须显形：桌面端看不到 console，否则用户只会得到一页白的，无从下手。 */
   const bad = suspectLeaves()
+  /* 整页墨迹达标但某一族整族缺失的叶要单独点名族名——只报「叶号」用户无从判断是哪块字没了。 */
+  const famBad = bad.filter(p => (p.blankFams?.length ?? 0) > 0)
   /* 字体没能内联同样要显形：墨迹判据抓不到它——回退字体照样把字画出来，
    * 只是字形不对。用户看到的会是「导出的字不是选的字体」，不给提示就无从定位。
    * 注意**只**提示这一条与上面的缺字：`probeUnproven`（探针未证实）是正常现象，
@@ -231,6 +255,7 @@ function statText(ms: number): string {
   const noFont = failedFamilies()
   return `光栅 ${(ms / 1000).toFixed(1)}s · ${ps.length} 叶 · 每叶内联增加 ${(grow / 1024 / 1024).toFixed(2)}MB` +
     (bad.length ? ` · ⚠ ${bad.length} 叶疑似缺字（${bad.map(p => p.label).join('、')}）` : '') +
+    (famBad.length ? ` · ⚠ 字体未画出来：${famBad.flatMap(p => p.blankFams.map(f => `${p.label} ${f}`)).join('、')}` : '') +
     (noFont.length ? ` · ⚠ 字体未内联：${noFont.join('、')}` : '')
 }
 
@@ -247,6 +272,8 @@ async function exportPDF() {
   done.value = false; expErr.value = null
   expName.value = selPdfName(); expTotal.value = expCount.value; expCur.value = 0
   resetProfiles()
+  /* 字体会话必须每次导出重置：子集是按字符集裁的，沿用上一次的会漏掉本书新出现的字。 */
+  beginFontSession(); primeCodepoints(bookChars())
   try {
     await warmAssets()
     const plan = planSpreads(sel.value)   // 预热后重新取：特殊页 <image> 此时才进 SVG
@@ -292,6 +319,7 @@ async function exportPNG() {
   done.value = false; expErr.value = null
   expName.value = `${selStem()}-*.png`; expTotal.value = expCount.value; expCur.value = 0
   resetProfiles()
+  beginFontSession(); primeCodepoints(bookChars())
   try {
     await warmAssets()
     const plan = planSpreads(sel.value)   // 预热后重新取：特殊页 <image> 此时才进 SVG

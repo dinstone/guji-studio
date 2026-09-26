@@ -17,6 +17,7 @@
     "@codemirror/view": "^6.43.11",
     "@wailsio/runtime": "latest",
     "codemirror": "^6.0.2",
+    "harfbuzzjs": "^1.6.2",
     "pdf-lib": "^1.17.1",
     "pinia": "^2.3.1",
     "pinyin-pro": "^3.29.4",

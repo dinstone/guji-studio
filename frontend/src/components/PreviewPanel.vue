@@ -6,6 +6,7 @@ import { ensureAssets, onAssetReady } from '../core/assets'
 import { fontLabelOf } from '../core/fontlist'
 import { resolveTplBlock, curUnit, curChapter, cur, view, proj, unitFlowText, volLabelOf, isTocUnit, isTocDerived, tocUnit, tplEdit, tplScope, setPreviewLayout, projectDir, toast, editorSel, gotoSource, linkOn } from '../stores/app'
 import { rasterizeSvg, saveBlobToOutput, downloadBlob } from '../core/exportImage'
+import { beginFontSession, primeCodepoints } from '../core/fontEmbed'
 
 const E = LayoutEngine
 const pagesEl = ref<HTMLElement | null>(null)
@@ -201,6 +202,11 @@ async function exportPreviewPng() {
   try {
     const ns = collectPreviewAssets()
     if (ns.length) await ensureAssets(ns)   // 堂号/水印素材预热，避免导出的图缺件
+    /* 字体会话：每次导出重置（子集按字符集裁，沿用上一次会漏掉本轮新出现的字），
+     * 并用当前单元文本 + 数字标点超集预热；漏掉的字符由逐叶扫描兜底（见 fontEmbed.ts）。 */
+    beginFontSession()
+    primeCodepoints(unitFlowText(curUnit() as any) +
+      '0123456789〇零一二三四五六七八九十百千万、，。：；！？「」『』〔〕…—（）()《》〈〉·')
     const dir = projectDir.value
     const total = leaves.value.length
     let od = ''
