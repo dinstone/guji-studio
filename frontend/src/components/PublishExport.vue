@@ -225,14 +225,13 @@ function statText(ms: number): string {
   /* 缺字页必须显形：桌面端看不到 console，否则用户只会得到一页白的，无从下手。 */
   const bad = suspectLeaves()
   /* 字体没能内联同样要显形：墨迹判据抓不到它——回退字体照样把字画出来，
-   * 只是字形不对。用户看到的会是「导出的字不是选的字体」，不给提示就无从定位。 */
+   * 只是字形不对。用户看到的会是「导出的字不是选的字体」，不给提示就无从定位。
+   * 注意**只**提示这一条与上面的缺字：`probeUnproven`（探针未证实）是正常现象，
+   * 接上 UI 会稳定误报（图片文档里无法查询字体就绪状态，详见 fontEmbed.ts）。 */
   const noFont = failedFamilies()
-  /* 第三条独立信号：字体数据没问题，但探针多轮都没能证明它在**图片文档**里可用。 */
-  const probeBad = ps.some(p => p.probeFail)
   return `光栅 ${(ms / 1000).toFixed(1)}s · ${ps.length} 叶 · 每叶内联增加 ${(grow / 1024 / 1024).toFixed(2)}MB` +
     (bad.length ? ` · ⚠ ${bad.length} 叶疑似缺字（${bad.map(p => p.label).join('、')}）` : '') +
-    (noFont.length ? ` · ⚠ 字体未内联：${noFont.join('、')}` : '') +
-    (probeBad ? ' · ⚠ 内联字体未在图片文档生效' : '')
+    (noFont.length ? ` · ⚠ 字体未内联：${noFont.join('、')}` : '')
 }
 
 function stamp() { const d = new Date(); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` }

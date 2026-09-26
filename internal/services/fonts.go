@@ -102,7 +102,8 @@ type fontEntry struct {
 	Family string
 	Path   string
 	Offset int64
-	Weight int // OS/2 usWeightClass（400 = Regular），同族名多文件时用它择优
+	Weight int  // OS/2 usWeightClass（400 = Regular），同族名多文件时用它择优
+	Italic bool // head.macStyle / OS/2 fsSelection 的斜体位，同族名多文件时正体优先
 }
 
 func absInt(n int) int {
@@ -110,6 +111,26 @@ func absInt(n int) int {
 		return -n
 	}
 	return n
+}
+
+/* rank 同族名多文件时的择优键，**越小越优**：正体一律优于斜体，其次看字重是否接近 400。
+ *
+ * 为什么必须把斜体单拎出来判：同一族的正体与斜体是**两个文件、族名完全相同**
+ * （Times New Roman.ttf 与 Times New Roman Italic.ttf 都叫 "Times New Roman"），
+ * 二者的 usWeightClass 又都是 400 —— 只比字重必然打平。而目录遍历按字典序、
+ * "Italic" 恰好排在 ".ttf" 之前，于是索引留下**斜体文件**。内联进 SVG 时 @font-face
+ * 不声明 font-style（浏览器按正体使用），结果是导出字形整体倾斜；预览走系统字体服务、
+ * 按 font-style 挑到正体 —— 表现为「预览正体、导出斜体」（本册踩过：注音「xí」）。
+ * 字重读不到时 weight=0 会得到 rank 400，与原「都是 0 时保留首个」的行为一致。 */
+func (e fontEntry) rank() int { return pickRank(e.Weight, e.Italic) }
+
+// pickRank 择优键本体（越小越优），供 fontEntry 与遍历中的临时项共用。
+func pickRank(weight int, italic bool) int {
+	dist := absInt(weight - 400)
+	if italic {
+		return 1<<20 + dist // 斜体无条件劣于任何同族正体
+	}
+	return dist
 }
 
 /* ---- 字体二进制读取：供导出时把字体内联进 SVG 的 @font-face ----
@@ -169,14 +190,14 @@ func fontIndexOf() map[string]fontEntry {
 					if it.Family == "" || strings.HasPrefix(it.Family, ".") {
 						continue
 					}
-					/* 同族名可能对应多个文件：方正清刻本悦宋的 FZQingKBYSJW-EL.TTF（ExtraLight）
-					 * 与 FZQingKBYSJW-R.TTF（Regular）族名都是 FZQingKeBenYueSongS。按目录字典序
-					 * 取首个会命中 -EL 超细体，导出字形比预览细一圈——预览走系统字体服务，按
-					 * Regular 权重挑的是 -R。故这里保留字重最接近 400 的那个（都是 0 时保留首个）。 */
-					if old, ok := m[it.Family]; ok && absInt(it.Weight-400) >= absInt(old.Weight-400) {
+					/* 同族名可能对应多个文件，择优顺序见 fontEntry.rank()：正体优先（排除
+					 * "Times New Roman Italic" 这类同族名斜体文件），再取字重最接近 400 的
+					 * （方正清刻本悦宋的 FZQingKBYSJW-EL.TTF(250) 与 -R.TTF(400) 族名都是
+					 * FZQingKeBenYueSongS，按目录字典序取首个会命中超细体、比预览细一圈）。 */
+					if old, ok := m[it.Family]; ok && pickRank(it.Weight, it.Italic) >= old.rank() {
 						continue
 					}
-					m[it.Family] = fontEntry{Family: it.Family, Path: path, Offset: it.Offset, Weight: it.Weight}
+					m[it.Family] = fontEntry{Family: it.Family, Path: path, Offset: it.Offset, Weight: it.Weight, Italic: it.Italic}
 				}
 				return nil
 			})
@@ -198,7 +219,11 @@ func (s *FontService) OpenFont(family string) (FontBlob, error) {
 	}
 	data, err := readFontData(e)
 	if err != nil {
-		return FontBlob{}, err
+		/* 取不到数据同样是**可预期降级**，与「索引里没有该族」同等处理：彩色 emoji 这类
+		 * 位图字体会超出单表上限，坏字体文件也会读失败。前端拿到空的 Size/Chunks 会跳过
+		 * 内联、按系统族名走回退，行为正常；这里返回 error 只会在 Wails 控制台刷一行 ERR，
+		 * 把真正的问题淹掉（本册 Kaiti SC 那次就是这么被淹的）。 */
+		return FontBlob{Family: family}, nil
 	}
 	n := (len(data) + FontChunkSize - 1) / FontChunkSize
 	fontDataMu.Lock()
@@ -231,7 +256,85 @@ func (s *FontService) ReadFontChunk(family string, i int) (string, error) {
 	return base64.StdEncoding.EncodeToString(data[off:end]), nil
 }
 
-// readFontData 取字体数据：普通文件整读；ttc 只取该子字体所在的连续区间。
+/* ttcSubfontData 把集合文件（ttc/otc）里的一个子字体重建成**独立的单字体 sfnt**。
+ *
+ * 为什么不能直接切 [base, 下一个 base) 那一段：ttc 里每个子字体各有表目录（目录位置用 base
+ * 定位），但目录里的表 offset 一律**相对文件开头**，各子字体的表数据往往集中存放在文件别处
+ * （子字体之间可能只隔几百字节）。直接切片得到的是无意义字节 —— 前端照样 base64 内联，
+ * 浏览器解析失败后静默回退系统字体，整件事只表现为「导出的字不是选的字体」。
+ * macOS 上宋体、苹方、楷体、冬青黑体全是 ttc，本册实测 130/130 个 ttc 族都切坏了。
+ *
+ * 做法：按子字体的表目录逐表取数据，重拼成 header + 表目录 + 表 的单字体文件，
+ * 表 offset 重算成新文件内的位置，表的 checksum 原样保留（值只与表数据有关，未变）。
+ * head 表的 checkSumAdjustment 保留原值：严格校验器才会看它，浏览器不校验。 */
+func ttcSubfontData(f *os.File, base int64) ([]byte, error) {
+	hdr := make([]byte, 12)
+	if _, err := f.ReadAt(hdr, base); err != nil {
+		return nil, err
+	}
+	sig := append([]byte(nil), hdr[:4]...)
+	numTables := int(binary.BigEndian.Uint16(hdr[4:6]))
+	if numTables <= 0 || numTables > 1024 {
+		return nil, fmt.Errorf("ttc 子字体表数异常: %d", numTables)
+	}
+	dir := make([]byte, numTables*16)
+	if _, err := f.ReadAt(dir, base+12); err != nil {
+		return nil, err
+	}
+	type tbl struct {
+		tag  [4]byte
+		csum uint32
+		data []byte
+	}
+	tbls := make([]tbl, 0, numTables)
+	for i := 0; i < numTables; i++ {
+		r := dir[i*16 : i*16+16]
+		off := int64(binary.BigEndian.Uint32(r[8:12]))
+		ln := int64(binary.BigEndian.Uint32(r[12:16]))
+		if ln <= 0 || ln > 1<<26 { // 单表上限 64MB，防坏文件
+			return nil, fmt.Errorf("表 %s 长度异常: %d", r[:4], ln)
+		}
+		b := make([]byte, ln)
+		if _, err := f.ReadAt(b, off); err != nil {
+			return nil, err
+		}
+		var t tbl
+		copy(t.tag[:], r[:4])
+		t.csum = binary.BigEndian.Uint32(r[4:8])
+		t.data = b
+		tbls = append(tbls, t)
+	}
+
+	head := 12 + numTables*16
+	total := head
+	for _, t := range tbls {
+		total += (len(t.data) + 3) &^ 3 // 每表 4 字节对齐
+	}
+	out := make([]byte, total)
+	copy(out[:4], sig)
+	binary.BigEndian.PutUint16(out[4:6], uint16(numTables))
+	es := 0
+	for 1<<(es+1) <= numTables {
+		es++
+	}
+	sr := 16 << es
+	binary.BigEndian.PutUint16(out[6:8], uint16(sr))                // searchRange
+	binary.BigEndian.PutUint16(out[8:10], uint16(es))               // entrySelector
+	binary.BigEndian.PutUint16(out[10:12], uint16(numTables*16-sr)) // rangeShift
+	pos := head
+	for i, t := range tbls {
+		rec := out[12+i*16 : 12+i*16+16]
+		copy(rec[:4], t.tag[:])
+		binary.BigEndian.PutUint32(rec[4:8], t.csum)
+		binary.BigEndian.PutUint32(rec[8:12], uint32(pos))
+		binary.BigEndian.PutUint32(rec[12:16], uint32(len(t.data)))
+		copy(out[pos:], t.data)
+		pos += (len(t.data) + 3) &^ 3
+	}
+	return out, nil
+}
+
+// readFontData 取字体数据：普通文件整读；ttc 子字体重建为单字体 sfnt（见 ttcSubfontData）。
 func readFontData(e fontEntry) ([]byte, error) {
 	f, err := os.Open(e.Path)
 	if err != nil {
@@ -241,29 +344,7 @@ func readFontData(e fontEntry) ([]byte, error) {
 	if e.Offset <= 0 {
 		return io.ReadAll(f)
 	}
-	st, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	bases, err := ttcBases(f)
-	if err != nil {
-		return nil, err
-	}
-	end := st.Size()
-	for _, b := range bases {
-		if b > e.Offset && b < end {
-			end = b
-		}
-	}
-	n := end - e.Offset
-	if n <= 0 {
-		n = st.Size()
-	}
-	data := make([]byte, n)
-	if _, err := f.ReadAt(data, e.Offset); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return ttcSubfontData(f, e.Offset)
 }
 
 // readFamilies 读出字体文件内全部子字体的 (英文族名, 本地化显示名)。
@@ -281,6 +362,7 @@ type fontNameEntry struct {
 	FontInfo
 	Offset int64
 	Weight int
+	Italic bool
 }
 
 // readEntries 读出字体文件内全部子字体的族名与显示名，附 ttc 子字体偏移。
@@ -312,7 +394,13 @@ func readEntries(f *os.File) []fontNameEntry {
 		if en == "" {
 			en = zh
 		}
-		out = append(out, fontNameEntry{FontInfo: FontInfo{Family: en, Label: zh}, Offset: base, Weight: weightAt(f, base)})
+		weight, italic := styleAt(f, base)
+		out = append(out, fontNameEntry{
+			FontInfo: FontInfo{Family: en, Label: zh},
+			Offset:   base,
+			Weight:   weight,
+			Italic:   italic,
+		})
 	}
 	return out
 }
@@ -396,34 +484,57 @@ func familyNamesAt(f *os.File, base int64) (en, zh string) {
 	return
 }
 
-// weightAt 读 OS/2 表的 usWeightClass（400 = Regular），用于同族名多字重时择优；
-// 读不到（无 OS/2 表或坏文件）返回 0，调用方按「保留首个」的老行为处理。
-func weightAt(f *os.File, base int64) int {
+// styleAt 一次读 OS/2 与 head 两张表，返回 (usWeightClass, 是否斜体)。
+//
+// 字重取 OS/2 表的 usWeightClass（400 = Regular）；斜体位**两处取或**：head 表 macStyle
+// 的 bit 1，与 OS/2 表 fsSelection 的 bit 0（offset 62）。只认一处会漏判部分字体。
+// 读不到的表按中性值处理（weight 0 / 非斜体），坏文件不会因误判成斜体而被择优丢弃。
+//
+// ⚠ **表数据的偏移是相对「文件开头」**，不是相对子字体 base —— 集合文件（ttc/otc）里
+// 每个子字体各有表目录，但目录里的 offset 一律从文件头算起（OpenType 字体集合规范）。
+// base 只用于定位**表目录本身**（base+12+i*16）。对普通文件 base=0 两者等价，所以
+// 只有 .ttc 会暴露：按 base+off 读会把隔壁子字体的表当自己的，样式位整片串味
+// （本册实测 Bodoni 72.ttc 的 Regular 子字体被读成斜体，择优时反而丢掉正体）。
+func styleAt(f *os.File, base int64) (weight int, italic bool) {
 	hdr := make([]byte, 12)
 	if _, err := f.ReadAt(hdr, base); err != nil {
-		return 0
+		return 0, false
 	}
 	numTables := int(binary.BigEndian.Uint16(hdr[4:6]))
 	if numTables <= 0 || numTables > 1024 {
-		return 0
+		return 0, false
 	}
 	dir := make([]byte, numTables*16)
 	if _, err := f.ReadAt(dir, base+12); err != nil {
-		return 0
+		return 0, false
 	}
+	var os2Off, headOff int64 = -1, -1
 	for i := 0; i < numTables; i++ {
 		r := dir[i*16 : i*16+16]
-		if string(r[:4]) != "OS/2" {
-			continue
+		switch string(r[:4]) {
+		case "OS/2":
+			os2Off = int64(binary.BigEndian.Uint32(r[8:12]))
+		case "head":
+			headOff = int64(binary.BigEndian.Uint32(r[8:12]))
 		}
-		off := int64(binary.BigEndian.Uint32(r[8:12]))
-		b := make([]byte, 6) // version(2) + xAvgCharWidth(2) + usWeightClass(2)
-		if _, err := f.ReadAt(b, base+off); err != nil {
-			return 0
-		}
-		return int(binary.BigEndian.Uint16(b[4:6]))
 	}
-	return 0
+	if os2Off >= 0 {
+		b := make([]byte, 6) // version(2) + xAvgCharWidth(2) + usWeightClass(2)
+		if _, err := f.ReadAt(b, os2Off); err == nil {
+			weight = int(binary.BigEndian.Uint16(b[4:6]))
+		}
+		sel := make([]byte, 2) // fsSelection 在 OS/2 偏移 62（v0 起布局稳定）
+		if _, err := f.ReadAt(sel, os2Off+62); err == nil && binary.BigEndian.Uint16(sel)&0x0001 != 0 {
+			italic = true
+		}
+	}
+	if headOff >= 0 {
+		b := make([]byte, 2) // macStyle 在 head 偏移 44
+		if _, err := f.ReadAt(b, headOff+44); err == nil && binary.BigEndian.Uint16(b)&0x0002 != 0 {
+			italic = true
+		}
+	}
+	return weight, italic
 }
 
 type nameRec struct {

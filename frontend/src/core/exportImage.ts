@@ -87,7 +87,10 @@ export interface LeafProfile {
   svgOut: number  // 内联后 SVG 字符数
   rounds: number  // 实际画了几轮（>1 说明补画过，即首轮没把正文画出来）
   ink: number     // 最终墨迹覆盖率（%，-1 = 未做判据）
-  probeFail: boolean // 字体探针未能确认「内联字体在这个图片文档里可用」
+  probeUnproven: boolean // 字体探针没能在多轮内证实「内联字体在这个图片文档里可用」——
+                         // **正常现象，不是失败**（图片文档里无法查询字体就绪状态，WebKit 还会
+                         // 缓存同 URL 的解析结果）。仅供性能排查看，不得据此告警：见 fontEmbed.ts
+                         // 「图片文档字体探针」段的三条原理性局限。
   stages: Record<string, number>
 }
 const PROF_KEY = 'guji.exportProfile'
@@ -111,11 +114,10 @@ export async function rasterizeSvg(svg: string, W: number, H: number, label = ''
   mark('images')
   const finalSvg = await embedFonts(texed)
   mark('fonts')
-  /* 先确证内联字体在**这个图片文档**里画得出来（真 Image 光栅化 + 双版对比）再进正式渲染。
-   * 探针失败只说明没法提前保证，渲染仍照常走，由下面的逐叶补画兜底。 */
+  /* 探针只当预热与耗时观测：它的结论不可作为失败依据（见 fontEmbed.ts 的三条局限）。
+   * 真发生「字体没就绪」，下面的逐叶墨迹补画会兜住；真发生「内联失败」，failedFamilies 会记。 */
   const probeOk = await probeFonts(finalSvg)
   mark('probe')
-  if (!probeOk) console.warn('[导出] 字体探针未能确认内联字体在图片文档里可用，改用逐叶墨迹补画兜底')
   const svgOut = finalSvg.length
   const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(finalSvg)
   mark('encode')
@@ -158,7 +160,7 @@ export async function rasterizeSvg(svg: string, W: number, H: number, label = ''
 
   const blob: Blob | null = await new Promise(ok => cv.toBlob(ok, 'image/png'))
   mark('png')
-  profiles.push({ label, total: +(performance.now() - t0).toFixed(1), svgIn, svgOut, rounds, ink: +ink.toFixed(1), probeFail: !probeOk, stages: st })
+  profiles.push({ label, total: +(performance.now() - t0).toFixed(1), svgIn, svgOut, rounds, ink: +ink.toFixed(1), probeUnproven: !probeOk, stages: st })
   if (!blob) throw new Error(`第 ${label || '?'} 叶光栅失败（画布可能过大）`)
   return blob
 }
@@ -176,14 +178,12 @@ export function logProfileSummary(kind: string): void {
   const grow = profiles.reduce((a, p) => a + Math.max(0, p.svgOut - p.svgIn), 0)
   const retried = profiles.filter(p => p.rounds > 1)
   const bad = suspectLeaves()
-  const probed = profiles.filter(p => p.probeFail)
   console.info(`[导出性能] ${kind} · ${profiles.length} 叶 · 光栅总 ${(total / 1000).toFixed(1)}s` +
     (retried.length ? ` · 补画 ${retried.length} 叶（${retried.map(p => p.label).join('、')}）` : '') +
-    (bad.length ? ` · **仍有 ${bad.length} 叶疑似缺字：${bad.map(p => p.label).join('、')}**` : '') +
-    (probed.length ? ' · **字体探针未确认内联字体可用（导出字形可能走回退字体）**' : ''))
+    (bad.length ? ` · **仍有 ${bad.length} 叶疑似缺字：${bad.map(p => p.label).join('、')}**` : ''))
   for (const p of profiles.slice(0, 3)) {
     const s = p.stages
-    console.info(`  ${p.label}: 总 ${p.total}ms | 内联 图${s.images ?? 0}/字${s.fonts ?? 0}ms | 探针 ${s.probe ?? 0}ms${p.probeFail ? '(未确认)' : ''} | 编码 ${s.encode ?? 0}ms` +
+    console.info(`  ${p.label}: 总 ${p.total}ms | 内联 图${s.images ?? 0}/字${s.fonts ?? 0}ms | 探针 ${s.probe ?? 0}ms | 编码 ${s.encode ?? 0}ms` +
       ` | 绘制 ${s.paint ?? 0}ms | 墨迹 ${p.ink < 0 ? '未测' : p.ink + '%'}·画 ${p.rounds} 轮 | PNG ${s.png ?? 0}ms | SVG ${MB(p.svgIn)} → ${MB(p.svgOut)}`)
   }
   console.info(`  内联使每叶平均膨胀 ${MB(grow / profiles.length)}，光栅合计 ${(total / 1000).toFixed(1)}s`)

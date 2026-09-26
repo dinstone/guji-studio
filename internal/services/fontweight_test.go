@@ -37,9 +37,9 @@ func TestFontIndexPrefersRegularWeight(t *testing.T) {
 	}
 	defer fe.Close()
 
-	wr := weightAt(fr, 0)
-	we := weightAt(fe, 0)
-	t.Logf("OS/2 usWeightClass: -R=%d  -EL=%d", wr, we)
+	wr, iaR := styleAt(fr, 0)
+	we, _ := styleAt(fe, 0)
+	t.Logf("OS/2 usWeightClass: -R=%d (italic=%v)  -EL=%d", wr, iaR, we)
 	if wr != 400 {
 		t.Errorf("Regular 的 usWeightClass 应为 400，实得 %d", wr)
 	}
