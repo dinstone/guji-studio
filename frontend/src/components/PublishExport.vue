@@ -11,7 +11,8 @@ import { appConfirm } from '../stores/dialog'
 import * as plat from '../platform/wails'
 import { ensureAssets } from '../core/assets'
 import { renderSpread } from '../core/special'
-import { rasterizeSvg, saveBlobToOutput, resetProfiles, getProfiles, logProfileSummary } from '../core/exportImage'
+import { rasterizeSvg, saveBlobToOutput, resetProfiles, getProfiles, logProfileSummary, suspectLeaves } from '../core/exportImage'
+import { failedFamilies } from '../core/fontEmbed'
 import PubGroupEditor from './PubGroupEditor.vue'
 
 const E = LayoutEngine
@@ -221,7 +222,17 @@ function statText(ms: number): string {
   const ps = getProfiles()
   if (!ps.length) return ''
   const grow = ps.reduce((a, p) => a + Math.max(0, p.svgOut - p.svgIn), 0) / ps.length
-  return `光栅 ${(ms / 1000).toFixed(1)}s · ${ps.length} 叶 · 每叶内联增加 ${(grow / 1024 / 1024).toFixed(2)}MB`
+  /* 缺字页必须显形：桌面端看不到 console，否则用户只会得到一页白的，无从下手。 */
+  const bad = suspectLeaves()
+  /* 字体没能内联同样要显形：墨迹判据抓不到它——回退字体照样把字画出来，
+   * 只是字形不对。用户看到的会是「导出的字不是选的字体」，不给提示就无从定位。 */
+  const noFont = failedFamilies()
+  /* 第三条独立信号：字体数据没问题，但探针多轮都没能证明它在**图片文档**里可用。 */
+  const probeBad = ps.some(p => p.probeFail)
+  return `光栅 ${(ms / 1000).toFixed(1)}s · ${ps.length} 叶 · 每叶内联增加 ${(grow / 1024 / 1024).toFixed(2)}MB` +
+    (bad.length ? ` · ⚠ ${bad.length} 叶疑似缺字（${bad.map(p => p.label).join('、')}）` : '') +
+    (noFont.length ? ` · ⚠ 字体未内联：${noFont.join('、')}` : '') +
+    (probeBad ? ' · ⚠ 内联字体未在图片文档生效' : '')
 }
 
 function stamp() { const d = new Date(); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` }

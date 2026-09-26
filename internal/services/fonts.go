@@ -102,6 +102,14 @@ type fontEntry struct {
 	Family string
 	Path   string
 	Offset int64
+	Weight int // OS/2 usWeightClass（400 = Regular），同族名多文件时用它择优
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 /* ---- 字体二进制读取：供导出时把字体内联进 SVG 的 @font-face ----
@@ -118,8 +126,17 @@ type FontBlob struct {
 	Chunks    int    `json:"chunks"`
 }
 
-// FontChunkSize 单个分块字节数（对齐前端 saveBlobToOutput 的分块粒度）。
-const FontChunkSize = 512 * 1024
+/* FontChunkSize 单个分块字节数。
+ *
+ * **必须能被 3 整除**：前端是把各分块的 base64 **字符串**直接首尾相接、再整体当一条 base64
+ * 解码的（`s += readFontChunk(family, i)`）。而 base64 编码 3 字节 → 4 字符，末尾不足 3 字节
+ * 时各自补 '='。分块字节数不是 3 的倍数时，每块结尾都有 '='，拼起来中间就冒出 '=' ——
+ * 宽松解码器**解到第一个分块边界就停**，浏览器 atob 直接抛 InvalidCharacterError。
+ * 后果极隐蔽：字体数据残缺 → 浏览器丢弃整条 @font-face → 静默回退系统默认中文字体，
+ * 界面上只表现为「导出的字不是选的那个字体」，完全不报错（本册踩过：512K 余 2，
+ * 一个 4MB 字体只有头 512KB 有效，导出字形一直是回退字体）。
+ * 512K = 524288 余 2，故取 524286 = 512K - 2（仍是 512K 量级，IPC 体积无忧）。 */
+const FontChunkSize = 512*1024 - (512*1024)%3
 
 var (
 	fontIndexOnce sync.Once
@@ -152,9 +169,14 @@ func fontIndexOf() map[string]fontEntry {
 					if it.Family == "" || strings.HasPrefix(it.Family, ".") {
 						continue
 					}
-					if _, ok := m[it.Family]; !ok {
-						m[it.Family] = fontEntry{Family: it.Family, Path: path, Offset: it.Offset}
+					/* 同族名可能对应多个文件：方正清刻本悦宋的 FZQingKBYSJW-EL.TTF（ExtraLight）
+					 * 与 FZQingKBYSJW-R.TTF（Regular）族名都是 FZQingKeBenYueSongS。按目录字典序
+					 * 取首个会命中 -EL 超细体，导出字形比预览细一圈——预览走系统字体服务，按
+					 * Regular 权重挑的是 -R。故这里保留字重最接近 400 的那个（都是 0 时保留首个）。 */
+					if old, ok := m[it.Family]; ok && absInt(it.Weight-400) >= absInt(old.Weight-400) {
+						continue
 					}
+					m[it.Family] = fontEntry{Family: it.Family, Path: path, Offset: it.Offset, Weight: it.Weight}
 				}
 				return nil
 			})
@@ -168,7 +190,11 @@ func fontIndexOf() map[string]fontEntry {
 func (s *FontService) OpenFont(family string) (FontBlob, error) {
 	e, ok := fontIndexOf()[family]
 	if !ok {
-		return FontBlob{}, fmt.Errorf("未找到字体族: %s", family)
+		/* 找不到族**不是错误**：新版 macOS 的部分系统字体（如楷体 Kaiti SC）不在 fontDirs 的
+		 * 四个目录里，由系统字体服务提供，索引里天然没有；而 SVG 图片文档里写系统族名照样能画。
+		 * 调用方（导出的字体内联）拿到 Size/Chunks 为 0 的 blob 跳过内联即可——返回 error
+		 * 只会让 Wails 在控制台打一行 ERR，把真正的问题淹掉。 */
+		return FontBlob{Family: family}, nil
 	}
 	data, err := readFontData(e)
 	if err != nil {
@@ -254,6 +280,7 @@ func readFamilies(f *os.File) []FontInfo {
 type fontNameEntry struct {
 	FontInfo
 	Offset int64
+	Weight int
 }
 
 // readEntries 读出字体文件内全部子字体的族名与显示名，附 ttc 子字体偏移。
@@ -285,7 +312,7 @@ func readEntries(f *os.File) []fontNameEntry {
 		if en == "" {
 			en = zh
 		}
-		out = append(out, fontNameEntry{FontInfo: FontInfo{Family: en, Label: zh}, Offset: base})
+		out = append(out, fontNameEntry{FontInfo: FontInfo{Family: en, Label: zh}, Offset: base, Weight: weightAt(f, base)})
 	}
 	return out
 }
@@ -367,6 +394,36 @@ func familyNamesAt(f *os.File, base int64) (en, zh string) {
 		en = zh
 	}
 	return
+}
+
+// weightAt 读 OS/2 表的 usWeightClass（400 = Regular），用于同族名多字重时择优；
+// 读不到（无 OS/2 表或坏文件）返回 0，调用方按「保留首个」的老行为处理。
+func weightAt(f *os.File, base int64) int {
+	hdr := make([]byte, 12)
+	if _, err := f.ReadAt(hdr, base); err != nil {
+		return 0
+	}
+	numTables := int(binary.BigEndian.Uint16(hdr[4:6]))
+	if numTables <= 0 || numTables > 1024 {
+		return 0
+	}
+	dir := make([]byte, numTables*16)
+	if _, err := f.ReadAt(dir, base+12); err != nil {
+		return 0
+	}
+	for i := 0; i < numTables; i++ {
+		r := dir[i*16 : i*16+16]
+		if string(r[:4]) != "OS/2" {
+			continue
+		}
+		off := int64(binary.BigEndian.Uint32(r[8:12]))
+		b := make([]byte, 6) // version(2) + xAvgCharWidth(2) + usWeightClass(2)
+		if _, err := f.ReadAt(b, base+off); err != nil {
+			return 0
+		}
+		return int(binary.BigEndian.Uint16(b[4:6]))
+	}
+	return 0
 }
 
 type nameRec struct {

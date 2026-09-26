@@ -23,8 +23,13 @@ import * as plat from '../platform/wails'
 const GENERIC = new Set(['', 'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif'])
 
 /** 别名前缀：@font-face 的 font-family 名字用引号包裹，故族名可原样带进来，只加 ASCII 前缀防撞名。 */
+const ALIAS_PREFIX = 'GujiEmbed-'
 function aliasOf(family: string): string {
-  return 'GujiEmbed-' + family.replace(/["'\\]/g, '')
+  return ALIAS_PREFIX + family.replace(/["'\\]/g, '')
+}
+/** 内联后的 SVG 里族名已带别名前缀，反推回 binCache 的键（原族名）。 */
+function unaliasOf(family: string): string {
+  return family.startsWith(ALIAS_PREFIX) ? family.slice(ALIAS_PREFIX.length) : family
 }
 
 /* 单字体体积闸门（原始字节）：超过就放弃内联，保持原有回退行为。 */
@@ -32,24 +37,63 @@ const MAX_FONT_BYTES = 6 * 1024 * 1024
 
 const binCache = new Map<string, string>()  // 族名 → 完整 base64 二进制
 const faceCache = new Map<string, string>() // 族名 → @font-face 声明（可安全复用到任意叶）
+/** 内联失败的族 → 原因（「族名（原因）」形式，UI 直接展示）。
+ *
+ *  **「取不到二进制」不算失败**：新版 macOS 的部分系统字体（楷体 Kaiti SC、苹方等）由系统字体
+ *  服务提供，本来就不在 fontDirs 的四个目录里，SVG 图片文档里按族名照样能解析，回退是正常
+ *  行为——把它当失败报警只会刷屏，还会把真正的问题淹掉。真该提示的只有两种：
+ *  能取到数据却拼出残缺字体，以及体积超限（用户选的字体确实没能跟着走）。 */
+const failed = new Map<string, string>()
+export function failedFamilies(): string[] {
+  return [...failed.entries()].map(([f, why]) => `${f}（${why}）`)
+}
+
+/** 校验拼回来的 base64 是不是**完整、有效**的字体二进制。
+ *
+ *  为什么必须校验：后端按块回传 base64，前端拼串。base64 是 3 字节 → 4 字符、末尾各自补 '='，
+ *  所以**分块字节数不是 3 的倍数时**，每块结尾的 '=' 会留在拼接串**中间**——宽松解码器解到
+ *  第一个块边界就停、atob 直接抛错，拿到的字体是**残缺**的。浏览器遇到坏字体不报错，只会
+ *  静默丢弃这条 @font-face 并回退系统默认中文字体，整件事在界面上只表现为「导出的字不是选的
+ *  那个字体」（本册真踩过：512K 分块 %3 余 2，8 块字体坏 7 块）。
+ *  宁可在这里判定失败、放弃内联（会记进 failed 并在 UI 提示），也不交付错字形。 */
+function fontB64Ok(b64: string, size: number): boolean {
+  if (b64.length !== Math.ceil(size / 3) * 4) return false
+  try {
+    const raw = atob(b64)            // 拼接串中间混入 '=' 会在这里抛错
+    if (raw.length !== size) return false
+    const m = raw.slice(0, 4)
+    return m === '\x00\x01\x00\x00' || m === 'OTTO' || m === 'true' || m === 'ttcf'
+  } catch {
+    return false
+  }
+}
 
 async function faceFor(family: string): Promise<string | null> {
   if (faceCache.has(family)) return faceCache.get(family)!
   try {
     if (!binCache.has(family)) {
       const blob = await plat.openFont(family)
-      if (!blob || !blob.size) return null
+      if (!blob || !blob.size) return null // 系统字体服务提供，按族名回退即可
       /* 体积闸门：整字体 base64 会让**每一叶**都膨胀这么多。系统里动辄十几 MB 的大字体
        * 内联后导出会慢到不可用，宁可保持现状也不拖垮整次导出。 */
-      if (blob.size > MAX_FONT_BYTES) return null
+      if (blob.size > MAX_FONT_BYTES) { failed.set(family, '体积超限，未内联'); return null }
       let s = ''
       for (let i = 0; i < blob.chunks; i++) s += await plat.readFontChunk(family, i)
+      if (!fontB64Ok(s, blob.size)) {
+        failed.set(family, '数据残缺')
+        console.error(`[导出] 字体 ${family} 的分块 base64 拼接后无法还原成有效字体` +
+          `（${s.length} 字符 / 期望 ${Math.ceil(blob.size / 3) * 4}，分块 ${blob.chunks} × ${blob.chunkSize} 字节；` +
+          `分块字节数须为 3 的倍数）。已跳过内联，该族将回退系统字体。`)
+        return null
+      }
       binCache.set(family, s)
     }
     const b64 = binCache.get(family)!
-    /* 必须用 <style> 包裹：直接把 @font-face 塞进 <svg> 会被当成 XML 文本节点照着画出来，
-     * 既污染版面，图片文档里也更可能整块丢弃这条声明。 */
-    const face = `<style>@font-face{font-family:"${aliasOf(family)}";src:url(data:font/ttf;base64,${b64}) format("truetype");}</style>`
+    /* 只产出声明本身，<style> 包裹交给 embedFonts 合并注入。
+     * 逐条各自包一层 <style> 再插是错的：第二次注入会匹配到自己刚插入的 <style> 开标签，
+     * 把后一条声明塞进前一条的 <style> 内部——XML 里嵌套 <style> 会被当子元素，
+     * 外层 CSS 文本里混进标记，整条声明可能被丢弃（探针实测过，输出形如 <style><style>…</style>…）。 */
+    const face = `@font-face{font-family:"${aliasOf(family)}";src:url(data:font/ttf;base64,${b64}) format("truetype");}`
     faceCache.set(family, face)
     return face
   } catch {
@@ -57,13 +101,13 @@ async function faceFor(family: string): Promise<string | null> {
   }
 }
 
-/** 把 @font-face 插进 SVG：有 <style> 就并进去，否则紧跟根 <svg>。 */
-function inject(svg: string, face: string): string {
-  const st = svg.match(/<style\b[^>]*>/i)
-  if (st) return svg.slice(0, st.index! + st[0].length) + face + svg.slice(st.index! + st[0].length)
+/** 把整块 <style>…</style> 插到根 <svg> 之后。
+ *  刻意**不**复用文档里已有的 <style>：SVG 允许多个 <style> 元素，@font-face 的作用范围
+ *  是整个文档，声明插在哪儿都一样；而往已有块里插就得先对齐它的收尾标签，多一处要同步的几何。 */
+function inject(svg: string, styleBlock: string): string {
   const root = svg.match(/<svg\b[^>]*>/i)
   if (!root) return svg
-  return svg.slice(0, root.index! + root[0].length) + face + svg.slice(root.index! + root[0].length)
+  return svg.slice(0, root.index! + root[0].length) + styleBlock + svg.slice(root.index! + root[0].length)
 }
 
 /* 引擎输出里 font-family 有两种写法，必须都覆盖：
@@ -99,11 +143,16 @@ function scanFamilies(svg: string): string[] {
   return fams
 }
 
-/** 把 font-family 栈里的内联族换成别名；首项不是内联族则原样返回。 */
+/** 重建单个族名：不是纯标识符就补引号（族名可含空格，如 Times New Roman、Songti SC）。 */
+const quoteFam = (s: string) => (/^[-\w]+$/.test(s) ? s : `'${s}'`)
+
+/** 把 font-family 栈里的内联族换成别名；首项不是内联族则原样返回。
+ *  注意别名必须按族名规则补引号：`parseStack` 已把原引号剥掉，而别名可能含空格
+ *  （GujiEmbed-Times New Roman），不补引号的 CSS 值会被拆成多个族名，内联永远匹配不上。 */
 function swap(raw: string, inline: Set<string>): string | null {
   const parts = parseStack(raw)
   if (!parts.length || !inline.has(parts[0])) return null
-  const out = parts.map((p, i) => (i === 0 && inline.has(p) ? aliasOf(p) : p))
+  const out = parts.map((p, i) => quoteFam(i === 0 && inline.has(p) ? aliasOf(p) : p))
   return out.join(',')
 }
 
@@ -130,5 +179,110 @@ export async function embedFonts(svg: string): Promise<string> {
     (m, q: string, raw: string) => sub(m, q, raw))
   out = out.replace(/font-family:([^;"]*)/g, (m, raw: string) => sub(m, undefined, raw))
 
-  return faces.reduce((acc, face) => inject(acc, face), out)
+  /* 所有声明合并成**一块** <style> 后一次性注入，避免逐条插入时的嵌套 <style>。 */
+  return inject(out, `<style>${faces.join('')}</style>`)
+}
+
+/* ================= 图片文档字体探针 =================
+ * 症状：@font-face 在 SVG-as-image 里是**异步解码**的。img.onload 只保证「文档可以画了」，
+ * 不保证字体已就绪；此刻 drawImage 会把正文画成整片空白——版心走系统族照常出图，
+ * 于是看着像「这一页没渲染」（本册 34 叶里稳定漏 1~5 叶）。
+ *
+ * 上一版在**主文档**里 document.fonts.add + load 预热，方向不对：SVG-as-image 是独立图片
+ * 文档，主文档的解码结果与它并不共享，所以没能根治。这里改用**真图片文档探针**：把一小段
+ * SVG 交给 new Image() 光栅化，直接观察字体有没有被用上。
+ *
+ * 判据必须是「双版对比」：只看到"画出了字"不能说明内联生效——字体没就绪时浏览器会回退到
+ * 默认族，照样画出字。故同尺寸同时渲染两版，一版用内联别名、一版用一个必然不存在的族名作
+ * 纯回退基准；两版位图不一致，才说明内联族真的被采用了。 */
+const PROBE_SIZE = 64
+const PROBE_TRIES = 3      // 单版渲染的重试次数（加载失败等）
+const PROBE_WAIT_MS = 40
+const PROBE_ATTEMPTS = 3   // 双版对比的轮次
+const PROBE_RETRY_MS = 120
+const PROBE_MIN_DIFF = 6   // 两版位图至少差这么多像素才算「内联生效」
+const PROBE_CHAR = '永'    // 常用字，目标字体必备
+
+/** 构造探针 SVG。useAlias=false 的版本刻意不带 @font-face、用一个不存在的族名，
+ *  它会稳定回退到默认族，作为「内联没生效时长什么样」的基准。 */
+function probeSvg(alias: string, b64: string, useAlias: boolean): string {
+  const fam = useAlias ? alias : 'GujiProbe-Missing-Family'
+  const style = useAlias
+    ? `<style>@font-face{font-family:"${alias}";src:url(data:font/ttf;base64,${b64}) format("truetype");}</style>`
+    : ''
+  /* 族名一律补引号：属性值本身用双引号包裹，内层改用单引号，含空格的族名才不会被拆开。 */
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${PROBE_SIZE}" height="${PROBE_SIZE}">${style}` +
+    `<text x="${PROBE_SIZE / 2}" y="${PROBE_SIZE - 14}" font-family="${quoteFam(fam)}" font-size="46"` +
+    ` text-anchor="middle" fill="#000">${PROBE_CHAR}</text></svg>`
+}
+
+const dataUrl = (svg: string) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+
+/** 把一段 SVG 光栅化到 PROBE_SIZE² 小画布，返回像素数据（取不到返回 null）。 */
+async function shoot(url: string): Promise<Uint8ClampedArray | null> {
+  const cv = document.createElement('canvas')
+  cv.width = PROBE_SIZE
+  cv.height = PROBE_SIZE
+  const g = cv.getContext('2d')
+  if (!g) return null
+  for (let i = 0; i < PROBE_TRIES; i++) {
+    const img = new Image()
+    try {
+      await new Promise<void>((ok, bad) => {
+        img.onload = () => ok()
+        img.onerror = () => bad(new Error('probe image'))
+        img.src = url
+      })
+    } catch {
+      await new Promise<void>(r => setTimeout(r, PROBE_WAIT_MS))
+      continue
+    }
+    g.clearRect(0, 0, PROBE_SIZE, PROBE_SIZE)
+    g.drawImage(img, 0, 0)
+    try {
+      return g.getImageData(0, 0, PROBE_SIZE, PROBE_SIZE).data
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/** 单族探针：两版位图一致 → 判「内联未生效」，等一会儿再来一轮。 */
+async function probeOne(family: string, b64: string): Promise<boolean> {
+  const alias = aliasOf(family)
+  /* URL 预先编码一次：重试时复用同一串，浏览器命中同一 URL 的图片缓存，后续轮次近乎免费。 */
+  const urlA = dataUrl(probeSvg(alias, b64, true))
+  const urlB = dataUrl(probeSvg(alias, b64, false))
+  for (let i = 0; i < PROBE_ATTEMPTS; i++) {
+    if (i) await new Promise<void>(r => setTimeout(r, PROBE_RETRY_MS * i))
+    const a = await shoot(urlA)
+    const b = await shoot(urlB)
+    if (!a || !b) continue
+    let diff = 0
+    for (let k = 0; k < a.length; k += 4) if (a[k] !== b[k]) diff++
+    if (diff >= PROBE_MIN_DIFF) return true
+  }
+  return false
+}
+
+const probeDone = new Map<string, Promise<boolean>>()
+
+/** 确认 SVG 里已内联的族在**图片文档**里真的画得出来。同一导出任务里每族只探一次。
+ *  返回 false 表示探针多轮都没能证明内联生效——调用方照常渲染，但应当据此提示，
+ *  而不是静默产出一页正文空白。 */
+export async function probeFonts(svg: string): Promise<boolean> {
+  if (typeof document === 'undefined') return true
+  const fams = scanFamilies(svg).map(unaliasOf).filter(f => binCache.has(f))
+  if (!fams.length) return true
+  let ready = true
+  for (const f of fams) {
+    let p = probeDone.get(f)
+    if (!p) {
+      p = probeOne(f, binCache.get(f)!)
+      probeDone.set(f, p)
+    }
+    if (!(await p)) ready = false
+  }
+  return ready
 }

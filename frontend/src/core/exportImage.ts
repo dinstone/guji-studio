@@ -2,7 +2,7 @@
  * 逻辑与 ExportPanel 原实现一致，抽出为单一来源，避免两边各维护一份。 */
 
 import * as plat from '../platform/wails'
-import { embedFonts } from './fontEmbed'
+import { embedFonts, probeFonts } from './fontEmbed'
 
 /* 纹理内联：SVG 以 data:URL 经 new Image() 光栅化时，相对路径（如 textures/xuan.jpg）加载不出来，
  * 这里把每个 <image href="相对路径"> 拉取并内联为 data-URI。同一路径按会话缓存，避免整书多页重复拉取。 */
@@ -34,8 +34,46 @@ export async function embedImages(svg: string): Promise<string> {
   return svg
 }
 
-/* 内联字体后，等字体解码落定的毫秒数（见下方 drawImage 处的重绘）。 */
-const FONT_SETTLE_MS = 30
+/* ============ 缺字页检测与补画 ============
+ * 内联字体在 SVG 图片文档里异步解码：img.onload 只保证「文档可以画了」。字体还没就绪时
+ * drawImage 会把正文整片画空（版心走系统族照常出图，看着像整页没渲染）。
+ *
+ * 关键教训：**同一个 Image 对象绘制过一次后，它的栅格化结果就被缓存**——之后无论清屏重绘
+ * 多少轮拿到的都是同一份（缺字的）位图。上一版用「画面指纹比对」判断稳定，恰好在缺字时
+ * 指纹纹丝不动，于是立刻 break、把空白页当成最终结果交出去。所以补画必须**重建 Image**。
+ *
+ * 判据用墨迹覆盖率：把画布缩到 1/8 后统计暗像素占比。实测正常页 ~6.3%、缺字页 ~0.7%
+ *（差 9 倍），阈值取 3% 两侧都有近一倍裕度。只在文字密集页上启用——封面/扉页/尾页的
+ * <text> 本来就少，稀疏是正常的，不该触发补画。 */
+const INK_MIN = 3.0            // 墨迹覆盖率下限（%），1/8 缩略图口径
+const INK_CHECK_MIN_TEXTS = 30 // 少于这么多 <text> 的页不做墨迹判据
+const RETRY_ROUNDS = 3         // 每叶最多画几轮（首轮达标即停，正常页无额外成本）
+const RETRY_WAIT_MS = 90       // 第 n 轮前等 n×90ms
+
+/** 用 1/8 缩略图统计墨迹覆盖率（%）。回读像素只有整幅的 1/64，成本可忽略。
+ *  取不到像素返回 null——此时不做判据，保留首轮结果。 */
+function inkCoverage(cv: HTMLCanvasElement, W: number, H: number): number | null {
+  try {
+    const sw = Math.max(1, W >> 3)
+    const sh = Math.max(1, H >> 3)
+    const p = document.createElement('canvas')
+    p.width = sw
+    p.height = sh
+    const pg = p.getContext('2d')
+    if (!pg) return null
+    pg.drawImage(cv, 0, 0, sw, sh)
+    const d = pg.getImageData(0, 0, sw, sh).data
+    let ink = 0
+    let n = 0
+    for (let i = 0; i < d.length; i += 4) {
+      if ((d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 < 140) ink++
+      n++
+    }
+    return n ? (ink / n) * 100 : null
+  } catch {
+    return null
+  }
+}
 
 /* ============ 光栅化性能统计 ============
  * 每叶逐段计时并留档，供导出面板显示与控制台核对。
@@ -47,6 +85,9 @@ export interface LeafProfile {
   total: number
   svgIn: number   // 内联前 SVG 字符数
   svgOut: number  // 内联后 SVG 字符数
+  rounds: number  // 实际画了几轮（>1 说明补画过，即首轮没把正文画出来）
+  ink: number     // 最终墨迹覆盖率（%，-1 = 未做判据）
+  probeFail: boolean // 字体探针未能确认「内联字体在这个图片文档里可用」
   stages: Record<string, number>
 }
 const PROF_KEY = 'guji.exportProfile'
@@ -70,35 +111,62 @@ export async function rasterizeSvg(svg: string, W: number, H: number, label = ''
   mark('images')
   const finalSvg = await embedFonts(texed)
   mark('fonts')
+  /* 先确证内联字体在**这个图片文档**里画得出来（真 Image 光栅化 + 双版对比）再进正式渲染。
+   * 探针失败只说明没法提前保证，渲染仍照常走，由下面的逐叶补画兜底。 */
+  const probeOk = await probeFonts(finalSvg)
+  mark('probe')
+  if (!probeOk) console.warn('[导出] 字体探针未能确认内联字体在图片文档里可用，改用逐叶墨迹补画兜底')
   const svgOut = finalSvg.length
   const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(finalSvg)
   mark('encode')
-  const img = new Image()
-  await new Promise<void>((ok, bad) => {
-    img.onload = () => ok()
-    img.onerror = () => bad(new Error(`第 ${label || '?'} 叶 SVG 解析失败（字体/引号未转义会产生非法 XML）`))
-    img.src = url
-  })
-  mark('decode')
+
   const cv = document.createElement('canvas')
   cv.width = W; cv.height = H
   const g = cv.getContext('2d')!
-  g.drawImage(img, 0, 0, W, H)
-  mark('paint')
-  /* @font-face 是**异步解码**的：img.onload 只保证 SVG 可绘制，不保证字体已就绪。
-   * 此刻 drawImage 会把字画成 fallback 字形，等 fonts 落定后清屏重绘一次，
-   * 避免导出结果随时序漂移（同一份模板两次导出长得不一样）。 */
-  if (finalSvg.includes('@font-face')) {
-    await new Promise<void>(r => setTimeout(r, FONT_SETTLE_MS))
+  const dense = (finalSvg.match(/<text\b/g) || []).length >= INK_CHECK_MIN_TEXTS
+  const checkInk = finalSvg.includes('@font-face') && dense
+
+  let rounds = 0
+  let ink = -1
+  for (let i = 0; i < RETRY_ROUNDS; i++) {
+    rounds = i + 1
+    if (i) await new Promise<void>(r => setTimeout(r, RETRY_WAIT_MS * i))
+    /* 每轮都**新建 Image**：同一个 Image 的栅格化结果会被缓存，清屏重绘拿到的还是同一份
+     *（缺字的）位图——这正是上一版「指纹比对」失效的原因。重建才会让 SVG 重新解析一遍，
+     * 也才有机会拿到「字体已就绪」的那一版。 */
+    const img = new Image()
+    await new Promise<void>((ok, bad) => {
+      img.onload = () => ok()
+      img.onerror = () => bad(new Error(`第 ${label || '?'} 叶 SVG 解析失败（字体/引号未转义会产生非法 XML）`))
+      img.src = url
+    })
     g.clearRect(0, 0, W, H)
     g.drawImage(img, 0, 0, W, H)
+    if (!checkInk) break
+    const c = inkCoverage(cv, W, H)
+    if (c == null) break
+    ink = c
+    if (c >= INK_MIN) break // 正文已经画出来了
+    if (i + 1 < RETRY_ROUNDS) st.retry = (st.retry ?? 0) + 1
   }
-  mark('settle')
+  mark('paint')
+
+  if (checkInk && ink >= 0 && ink < INK_MIN) {
+    /* 补画到底也没画出来：不静默交白卷，明确留痕（导出汇总里会统计）。 */
+    console.warn(`[导出] 第 ${label || '?'} 叶疑似缺字：墨迹 ${ink.toFixed(1)}% < ${INK_MIN}%（已补画 ${rounds} 轮）`)
+  }
+
   const blob: Blob | null = await new Promise(ok => cv.toBlob(ok, 'image/png'))
   mark('png')
-  profiles.push({ label, total: +(performance.now() - t0).toFixed(1), svgIn, svgOut, stages: st })
+  profiles.push({ label, total: +(performance.now() - t0).toFixed(1), svgIn, svgOut, rounds, ink: +ink.toFixed(1), probeFail: !probeOk, stages: st })
   if (!blob) throw new Error(`第 ${label || '?'} 叶光栅失败（画布可能过大）`)
   return blob
+}
+
+/** 光栅后「补画兜底也没救回来」的叶。UI 要拿它提示用户，故导出——
+ *  桌面端没有 devtools，console.warn 那一行用户根本看不见。 */
+export function suspectLeaves(): LeafProfile[] {
+  return profiles.filter(p => p.ink >= 0 && p.ink < INK_MIN)
 }
 
 /** 导出完成后打一份人能读的性能汇总（仅开关打开时）。 */
@@ -106,12 +174,17 @@ export function logProfileSummary(kind: string): void {
   if (!profileOn() || !profiles.length) return
   const total = profiles.reduce((a, p) => a + p.total, 0)
   const grow = profiles.reduce((a, p) => a + Math.max(0, p.svgOut - p.svgIn), 0)
-  console.info(`[导出性能] ${kind} · ${profiles.length} 叶 · 光栅总 ${(total / 1000).toFixed(1)}s`)
+  const retried = profiles.filter(p => p.rounds > 1)
+  const bad = suspectLeaves()
+  const probed = profiles.filter(p => p.probeFail)
+  console.info(`[导出性能] ${kind} · ${profiles.length} 叶 · 光栅总 ${(total / 1000).toFixed(1)}s` +
+    (retried.length ? ` · 补画 ${retried.length} 叶（${retried.map(p => p.label).join('、')}）` : '') +
+    (bad.length ? ` · **仍有 ${bad.length} 叶疑似缺字：${bad.map(p => p.label).join('、')}**` : '') +
+    (probed.length ? ' · **字体探针未确认内联字体可用（导出字形可能走回退字体）**' : ''))
   for (const p of profiles.slice(0, 3)) {
     const s = p.stages
-    /* settle 段含 FONT_SETTLE_MS 的强制等待，是固定成本不是开销所在。 */
-    console.info(`  ${p.label}: 总 ${p.total}ms | 内联 ${s.images ?? 0}/${s.fonts ?? 0}ms | 编码 ${s.encode ?? 0}/${s.decode ?? 0}ms` +
-      ` | 绘制 ${s.paint ?? 0}/(+${FONT_SETTLE_MS})${(s.png ?? 0)}ms | SVG ${MB(p.svgIn)} → ${MB(p.svgOut)}`)
+    console.info(`  ${p.label}: 总 ${p.total}ms | 内联 图${s.images ?? 0}/字${s.fonts ?? 0}ms | 探针 ${s.probe ?? 0}ms${p.probeFail ? '(未确认)' : ''} | 编码 ${s.encode ?? 0}ms` +
+      ` | 绘制 ${s.paint ?? 0}ms | 墨迹 ${p.ink < 0 ? '未测' : p.ink + '%'}·画 ${p.rounds} 轮 | PNG ${s.png ?? 0}ms | SVG ${MB(p.svgIn)} → ${MB(p.svgOut)}`)
   }
   console.info(`  内联使每叶平均膨胀 ${MB(grow / profiles.length)}，光栅合计 ${(total / 1000).toFixed(1)}s`)
 }
