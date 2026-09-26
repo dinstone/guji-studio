@@ -159,10 +159,10 @@
     comment_size_auto: 1, comment_size_ratio: 0.5, comment_font1_size: 45,
     comment_ydis: 1.05, comment_font_color: '#3a3a3a', comment_font_family: 'song_tc',
     /* 版心文字 */
-    title_text: '图书名称', title_postfix: '卷X', title_volnames: '', if_tpcenter: 1,
+    title_text: '图书名称', title_postfix: '卷X', title_volnames: '', if_tpcenter: 'right',
     title_font_size: 96, title_y: 1013, title_ydis: 1.05, title_color: '#141414',
     title_font_family: 'song_tc', pager_font_family: 'song_tc',
-    pager_font_size: 44, pager_y: 827, pager_color: '#141414', pager_style: 'cn',
+    pager_font_size: 44, pager_y: 827, pager_color: '#141414', pager_style: 'cn', pager_mode: 'center',
     vol_y_auto: 1, vol_y: 1500,   // 卷次纵向位置：auto=内容区高度比例 0.62；手动填绝对值 px
     /* 标点（青简同款：正文 / 夹注各 全角 / 半角 / 悬空 / 无 + 朱色） */
     comment_comma_fullwidth: 1,
@@ -1941,14 +1941,32 @@
       function seamFill(fs) {
         return (g.seam && g.seam.width >= fs * 0.8) ? t.canvas_color : null;
       }
-      var tx = t.if_tpcenter ? m.centerX : m.centerX - halfC + num(t.title_font_size, 60) * 0.62;
-      var pagerTxt = t.pager_style === 'arabic' ? String(page.leaf) : cn(page.leaf);
-      var pv = pagerTxt.split('');
+      /* 版心文字横向对齐：居中 / 居左 / 居右（旧版 bool 值兼容：1/true→居中，0/false→居左） */
+      var _al = t.if_tpcenter;
+      if (_al === true || _al === 1) _al = 'center';
+      else if (_al === false || _al === 0) _al = 'left';
+      else if (_al !== 'left' && _al !== 'right' && _al !== 'center') _al = 'center';
+      var tfs0 = num(t.title_font_size, 60);
+      var tx = _al === 'center' ? m.centerX
+        : _al === 'right' ? (m.centerX + halfC - tfs0 * 0.62)
+        : (m.centerX - halfC + tfs0 * 0.62);
       var pfs = num(t.pager_font_size, 30);
-      for (i = 0; i < pv.length; i++)
-        o.push('<text class="v-h v-pager" x="' + f(tx) + '" y="' + f(pagerY + (i + 0.5) * pfs) + '" font-size="' + f(pfs) +
-          '" fill="' + (seamFill(pfs) || t.pager_color) + '" font-family="' + esc(fontPager) + '"' +
-          ' text-anchor="middle" dominant-baseline="central">' + esc(pv[i]) + '</text>');
+      /* 页码模式：center = 一叶一码（版心单列，现状）；face = 一叶两码（版心并列竖排，
+         右码 = 2n−1、左码 = 2n —— 右半叶先读，右码贴版界右缘、左码贴左缘；版心原叶码自动隐藏） */
+      function pagerRun(x, txt) {
+        var pv = String(txt).split('');
+        for (var j = 0; j < pv.length; j++)
+          o.push('<text class="v-h v-pager" x="' + f(x) + '" y="' + f(pagerY + (j + 0.5) * pfs) + '" font-size="' + f(pfs) +
+            '" fill="' + (seamFill(pfs) || t.pager_color) + '" font-family="' + esc(fontPager) + '"' +
+            ' text-anchor="middle" dominant-baseline="central">' + esc(pv[j]) + '</text>');
+      }
+      if (String(t.pager_mode) === 'face') {
+        var pfmt = function (n) { return t.pager_style === 'arabic' ? String(n) : cn(n); };
+        pagerRun(m.centerX + halfC - pfs * 0.62, pfmt(2 * page.leaf - 1));
+        pagerRun(m.centerX - halfC + pfs * 0.62, pfmt(2 * page.leaf));
+      } else {
+        pagerRun(tx, t.pager_style === 'arabic' ? String(page.leaf) : cn(page.leaf));
+      }
 
       var tfs = num(t.title_font_size, 60), tyd = Math.max(0.6, num(t.title_ydis, 1.05));
       var tv = String(t.title_text || '').split('');

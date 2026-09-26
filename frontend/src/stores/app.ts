@@ -340,6 +340,12 @@ export function bookTitle(): string {
 function finalizeTpl(out: Record<string, any>): Record<string, any> {
   const rs = out.ruby_show == null ? 2 : Number(out.ruby_show)
   out._rubyOn = (rs === 1 || (rs === 2 && bookHasRuby(out.tag_ruby))) ? 1 : 0
+  /* 版心书名对齐：旧版 bool 值（1/true→居中，0/false→居左）归一为三态字符串，
+     让面板 seg 控件正确高亮，并随保存自愈 */
+  const al = out.if_tpcenter
+  if (al === true || al === 1) out.if_tpcenter = 'center'
+  else if (al === false || al === 0) out.if_tpcenter = 'left'
+  else if (al !== 'left' && al !== 'right' && al !== 'center') out.if_tpcenter = 'center'
   return out
 }
 
@@ -405,24 +411,25 @@ export function setTocDerived(on: boolean) {
   }
   t.derived = on
 }
-/** 把一组字符位置映射到「单元内」0-based 页序（按 tpl 对 text 分页，用 token._pos 反查） */
-function pageIndexOfText(tpl: Record<string, any>, text: string, positions: number[]): number[] {
+/** 把一组字符位置映射到「单元内」0-based 叶序 + 命中列所在半叶（0 = 右叶先读 / 1 = 左叶）。
+ *  半叶信息供「一叶两码」口径把叶序换算成面码（右 = 2n−1、左 = 2n）。 */
+function pageIndexOfText(tpl: Record<string, any>, text: string, positions: number[]): { p: number; half: number }[] {
   const norm = String(text || '').replace(/\r\n?/g, '\n')
   const pages = LayoutEngine.paginate(tpl, norm).pages as any[]
-  if (!pages.length) return positions.map(() => 0)
+  if (!pages.length) return positions.map(() => ({ p: 0, half: 0 }))
   return positions.map(pos => {
     for (let pi = 0; pi < pages.length; pi++) {
       for (const col of pages[pi].cols) {
         for (const it of col.items) {
-          if (it._pos != null && it._pos >= pos) return pi
+          if (it._pos != null && it._pos >= pos) return { p: pi, half: col.half ? 1 : 0 }
         }
       }
     }
-    return pages.length - 1
+    return { p: pages.length - 1, half: 0 }
   })
 }
-/** 取某单元各章首字所在的 0-based 页序（按「单元内」分页；不依赖 # 标记，章标题为元数据也成立） */
-function chapterPageIdx(u: Block | Volume): number[] {
+/** 取某单元各章首字所在的 0-based 叶序 + 半叶（按「单元内」分页；不依赖 # 标记，章标题为元数据也成立） */
+function chapterPageIdx(u: Block | Volume): { p: number; half: number }[] {
   const chaps = (u.chapters || []) as Chapter[]
   if (!chaps.length) return []
   const norm = (s: string) => String(s || '').replace(/\r\n?/g, '\n')
@@ -444,6 +451,14 @@ function buildTocVolEntries(tocPages: number) {
   }
   for (const vol of proj.tree.scrolls) {
     const vtext = (vol.chapters || []).map(c => c.text).filter(Boolean).join('\n')
+    /* 页码模式取自本卷生效模板：face = 一叶两码 → 目录页码换算成面码
+       （前缀 cursor 以叶累计，×2 成面；章首面 = 叶序×2 + 半叶偏移，右 = 2n−1、左 = 2n） */
+    const faceMode = String((resolveTplBlock(vol) as any).pager_mode) === 'face'
+    const off = faceMode ? 2 : 1
+    const pageNo = (r?: { p: number; half: number }) => {
+      const rr = r ?? { p: 0, half: 0 }
+      return faceMode ? rr.p * off + rr.half : rr.p
+    }
     let entries: { title: string; page: number }[]
     if (headingMode) {
       /* 扫卷文流里的二级标题（## 且非 ###），每个 ## 行作为一条目录项，按字符位置定位页码。
@@ -451,12 +466,12 @@ function buildTocVolEntries(tocPages: number) {
        * 「位置基准」一致——否则偏移与 token._pos 错位会串页。 */
       const { titles, positions, norm } = scanTocHeadings(vtext)
       const pages = titles.length ? pageIndexOfText(resolveTplBlock(vol), norm, positions) : []
-      entries = titles.map((t, i) => ({ title: t, page: cursor + (pages[i] ?? 0) + 1 }))
+      entries = titles.map((t, i) => ({ title: t, page: cursor * off + pageNo(pages[i]) + 1 }))
     } else {
       const idx = chapterPageIdx(vol)
       entries = (vol.chapters || []).map((c, i) => ({
         title: c.title || '',
-        page: cursor + (idx[i] != null ? idx[i] : (idx[i - 1] ?? 0)) + 1,
+        page: cursor * off + pageNo(idx[i] != null ? idx[i] : idx[i - 1]) + 1,
       }))
     }
     out.push({ name: vol.name, chapters: entries })
