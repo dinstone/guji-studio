@@ -10,6 +10,8 @@ import * as SettingsSvc from '../../bindings/gujistudio/internal/services/settin
 import * as FontSvc from '../../bindings/gujistudio/internal/services/fontservice.js'
 // @ts-ignore
 import * as TplSvc from '../../bindings/gujistudio/internal/services/templateservice.js'
+// @ts-ignore
+import * as PrintSvc from '../../bindings/gujistudio/internal/services/printservice.js'
 
 /** 文章池中的一篇文章（归一化）：文件名由 title 派生（<title>.txt，重名 -2） */
 export interface ChapterFull { id: string; title: string; text: string }
@@ -184,6 +186,22 @@ export async function saveExportFileChunk(dir: string, name: string, dataB64: st
 /* 在文件管理器中打开指定目录（导出后一键定位 output/） */
 export async function openFolder(path: string): Promise<void> {
   return (ProjectSvc as any).OpenFolder(path)
+}
+
+/* ---- 矢量打印（第二输出通道） ----
+ * 对主窗口发起系统打印。WebKit 以 print media 重新布局：应用 UI 隐藏，
+ * 仅 #print-root（逐叶 SVG，teleport 到 body）参与分页——document 上下文里
+ * 系统字体直接解析（零内联），输出为矢量（文字可选中可搜索）。
+ * 用户在打印对话框中选「存储为 PDF」即得矢量 PDF。 */
+export async function printWindow(): Promise<void> {
+  return (PrintSvc as any).Print()
+}
+
+/* 静默矢量 PDF 导出：Go 侧打印桥（WKWebView printOperation + NSPrintSaveJob）
+ * 直接把 #print-root 打印成 PDF 落到 path，无对话框。纸张 = 叶子物理尺寸（毫米），
+ * 边距 0、不缩放、每叶恰好一页；字体由 WebKit 解析系统字体（零内联），输出矢量文字。 */
+export async function exportVectorPDF(path: string, wMM: number, hMM: number): Promise<void> {
+  return (PrintSvc as any).ExportPDF(path, wMM, hMM)
 }
 
 /* 用系统默认浏览器打开外部链接（Wails 内 webview 的 <a target=_blank> 不会自动弹系统浏览器） */

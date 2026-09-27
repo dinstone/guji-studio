@@ -312,6 +312,49 @@ async function openOutput() {
   catch (e: any) { toast('打开目录失败：' + (e?.message || e)) }
 }
 
+/* ============ 矢量打印（第二输出通道，与位图导出并存） ============
+ * 预览的逐叶 SVG（spreads）在 document 上下文渲染，系统字体直接可解析；
+ * 打印走 WebKit 打印管线，同一批 SVG 以 print media 参与分页——字体零内联、
+ * 输出矢量 PDF（文字可选中可搜索）。打印内容与右侧预览严格同源。 */
+const printing = ref(false)
+/* 300dpi 像素 → 物理毫米（1px = 25.4/300 mm），打印 1:1 不缩放 */
+function mm(v: number): string { return ((v / 300) * 25.4).toFixed(2) + 'mm' }
+function mmNum(v: number): number { return (v / 300) * 25.4 }
+async function printBook() {
+  if (!spreads.value.length) { toast('请先渲染预览：打印内容与右侧预览同源'); return }
+  printing.value = true
+  try { await plat.printWindow() }
+  catch (e: any) { toast('打印失败：' + (e?.message || e)) }
+  printing.value = false
+}
+
+/* 矢量 PDF 静默导出：Go 打印桥直出文件（无对话框），与位图导出同一落盘位置与弹窗交互。
+ * WebKit 一次性打印整书（主线程数秒），无逐叶进度；叶子尺寸全书一致，取首叶换算毫米。 */
+async function exportVectorPDF() {
+  if (sel.value === null) { toast('请先在左侧选择整书合并或某个分册'); return }
+  if (!expCount.value) { toast('当前选择没有可导出的内容'); return }
+  exporting.value = true; lastOutputDir.value = ''; expStat.value = ''
+  done.value = false; expErr.value = null
+  expName.value = selPdfName(); expTotal.value = 1; expCur.value = 0
+  try {
+    if (!spreads.value.length) await selectAndRender(sel.value)   // print-root 与预览同源，须先渲染
+    const plan = planSpreads(sel.value)
+    if (!plan.length) throw new Error('没有可导出的叶')
+    const dir = projectDir.value.endsWith('output') ? projectDir.value : projectDir.value + '/output'
+    const path = `${dir}/${selPdfName()}`
+    await plat.exportVectorPDF(path, mmNum(plan[0].W), mmNum(plan[0].H))
+    expCur.value = 1
+    expStat.value = `矢量输出 · ${plan.length} 叶 · 字体由系统直接解析（零内联）`
+    lastOutputDir.value = dir
+    done.value = true
+  } catch (e: any) {
+    expErr.value = '矢量 PDF 生成失败：' + (e?.message || e)
+    done.value = true
+    toast('矢量 PDF 生成失败：' + (e?.message || e))
+  }
+  exporting.value = false
+}
+
 async function exportPNG() {
   if (sel.value === null) { toast('请先在左侧选择整书合并或某个分册'); return }
   if (!expCount.value) { toast('当前选择没有可导出的内容'); return }
@@ -370,8 +413,14 @@ async function exportPNG() {
       <label class="ck"><input v-model="includeSpecial" type="checkbox"> 包含特殊页（封面/扉页/尾页）</label>
 
       <div class="grp">输出</div>
-      <button class="act" :disabled="exporting || !expCount" @click="exportPDF">导出 PDF（{{ expCount }} 叶）</button>
+      <button class="act" :disabled="exporting || !expCount" @click="exportPDF">导出 PDF 位图（{{ expCount }} 叶）</button>
+      <button class="act" :disabled="exporting || !expCount"
+        title="静默矢量导出：不经打印对话框，直接生成矢量 PDF 到 output/。字体由系统直接解析（预览用什么字体就是什么字体），文字为矢量字形、任意缩放清晰。生成期间界面会短暂无响应（WebKit 整书打印，数秒）。"
+        @click="exportVectorPDF">导出 PDF 矢量（{{ expCount }} 叶）</button>
       <button class="act sub" :disabled="exporting" @click="exportPNG">导出 PNG（逐叶）</button>
+      <button class="act sub" :disabled="printing || rendering || !spreads.length"
+        title="走系统打印对话框（可改纸张/打印机）：字体由系统直接解析，输出矢量。"
+        @click="printBook">打印…（对话框）</button>
       <button class="act sub" @click="openOutput">打开导出目录</button>
       <div class="note">
         选中左侧某项后异步渲染预览，导出按钮<span class="hl">仅对该成品生效</span>。<br>
@@ -476,6 +525,16 @@ async function exportPNG() {
         </div>
       </div>
     </div>
+
+    <!-- 矢量打印容器：teleport 到 body 直下（打印时 #app 整体隐藏，仅此容器参与分页）。
+         屏显 display:none（见 App.vue 全局 @media print 块），内容与预览 spreads 同源。
+         每叶固定毫米尺寸（300dpi px→mm），WebKit 打印时按物理尺寸 1:1 排布。 -->
+    <Teleport to="body">
+      <div id="print-root" aria-hidden="true">
+        <div v-for="(s, i) in spreads" :key="i" class="print-leaf"
+          :style="{ width: mm(s.W), height: mm(s.H) }" v-html="s.svg"></div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -553,4 +612,11 @@ figcaption { font-size: 11px; color: #888780; margin-top: 6px; line-height: 1.4;
 .exp-btn { border: 0.5px solid #0f6e56; background: #0f6e56; color: #e1f5ee; border-radius: 7px; padding: 8px 18px; font-size: 13px; cursor: pointer; }
 .exp-btn.ghost { background: #fff; color: #0f6e56; }
 .exp-btn:hover { opacity: .9; }
+
+/* 矢量打印容器（teleport 到 body，屏显由 App.vue 全局块隐藏）：每叶一页、
+   固定毫米尺寸 1:1 排布；svg 用 CSS 覆盖其 300dpi 像素 width/height 属性。 */
+.print-leaf { page-break-after: always; break-after: page; overflow: hidden; }
+.print-leaf:last-child { page-break-after: auto; break-after: auto; }
+/* 注意：`.print-leaf svg` 的缩放规则不能写在这（scoped 编译成 svg[data-v-x]，
+ * v-html 注入的 svg 不带该属性、规则不命中）——已挪到 App.vue 全局打印块。 */
 </style>

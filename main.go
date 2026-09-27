@@ -32,6 +32,7 @@ func main() {
 			application.NewService(&services.FontService{}),
 			application.NewService(&services.TemplateService{}),
 			application.NewService(&services.UpdateService{}),
+			application.NewService(&services.PrintService{}),
 		},
 		// 注册 .gvs 文件关联：双击项目文件即可在 GujiStudio 打开
 		FileAssociations: []string{".gvs"},

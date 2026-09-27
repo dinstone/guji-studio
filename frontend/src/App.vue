@@ -156,4 +156,20 @@ input, select, button { font-family: inherit; }
 .booting-splash span { font-size: 13px; }
 /* 全局 toast：所有视图共用（原挂在 SidebarPanel 内，图书视图外不可见） */
 .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #2c2c2a; color: #fff; font-size: 12px; padding: 7px 14px; border-radius: 7px; z-index: 300; box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+
+/* ---- 矢量打印（PublishExport.vue 的第二输出通道） ----
+ * #print-root 由 PublishExport teleport 到 body 直下，屏显隐藏；打印时应用 UI
+ * 整体隐藏、仅打印容器参与分页——WebKit 打印管线在 document 上下文渲染这批 SVG，
+ * 系统字体直接解析（零内联）、输出矢量文字。@page margin 0 保证逐叶 1:1 无白边。 */
+#print-root { display: none; }
+/* svg 缩放必须写在全局块：PublishExport 的 scoped 样式编译成 .print-leaf svg[data-v-x]，
+ * 而 v-html 注入的 svg 没有 data-v 属性，规则不命中 → svg 按 width 属性的 300dpi 像素
+ * 渲染（毫米容器的 3.125 倍）→ overflow:hidden 裁到只剩一角（2026-09-27 实测翻过车）。 */
+#print-root svg { width: 100%; height: 100%; display: block; }
+@media print {
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  #app { display: none !important; }
+  #print-root { display: block !important; }
+  @page { margin: 0; }
+}
 </style>
