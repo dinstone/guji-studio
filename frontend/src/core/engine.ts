@@ -28,8 +28,8 @@
               再按 ruby_bias 在字间净空带内分配（0 = 居中 / 1 = 盒底贴本字上沿），
               不再像旧版那样「盒底按呼吸间距吊在本字上方」（那会让注音恒贴上方的字）。 */
   var RUBY_RUBY_RUBY_INK_HZ = 0.922, RUBY_BOX = 0.87, RUBY_ASC = 0.695, RUBY_DESC = 0.175;
-  /* 闭合标点（尾标点）字符集：正文 / 强调 / 夹注三套竖排标点共用。
-     竖排下不可置于列首（避头点）：正文/强调在列满时按「**标点压缩**」处理——闭号不新起列，
+  /* 闭合标点（尾标点）字符集：正文 / 批文 / 夹注三套竖排标点共用。
+     竖排下不可置于列首（避头点）：正文/批文在列满时按「**标点压缩**」处理——闭号不新起列，
      全尺寸排在末字之后、列底「下底线→版框底」这段余白里（放不下才等比缩到放得下）；
      夹注另参与折行均衡与挤挂判定（见 paginate）。
      开引号类（“ ‘ 《 〈）不在此列——它们可以居列首，无需避头。
@@ -400,7 +400,7 @@
                 fs·RUBY_RUBY_INK_HZ + (fs·k)·r·BOX + gap ≤ cellH
        → fs·k ≤ (cellH − gap) / (RUBY_RUBY_INK_HZ + BOX·r)   （默认 r=0.18 / gap=2 → 缩约 4.7%）
        gap 是「上下合计呼吸」，落位时按 ruby_bias 在字间净空带内分配（见 drawColumn）。
-       注：k 只对「正文字形（含正文标点、强调、自动尺寸徽标）」生效；章节标题、夹注、徽标占格
+       注：k 只对「正文字形（含正文标点、批文、自动尺寸徽标）」生效；章节标题、夹注、徽标占格
        仍按原字号算，避免 chapterPerCol / 夹注块高变化引起分页漂移。 */
     var rubyK = 1, rubySize = 0;
     var rubyOn = rubyActive(t) ? 1 : 0;
@@ -591,8 +591,8 @@
         toks.push({ t: 'accent', chars: cbA.chars, pos: i, posArr: cbA.poses.map(function (x) { return i + 1 + x; }) });
         i = endA + 1; continue;
       }
-      /* ^注音^：横排小字挂到「前一个字形」上。仅在正文层解析——夹注【】与强调 [] 的内容
-         在各自分支内整段取走，其内部的 ^ 原样作普通字符（本版不支持夹注/强调内注音）。
+      /* ^注音^：横排小字挂到「前一个字形」上。仅在正文层解析——夹注【】与批文 [] 的内容
+         在各自分支内整段取走，其内部的 ^ 原样作普通字符（本版不支持夹注/批文内注音）。
          标记符左右同形（默认 ^^）：闭符取「下一个 ^」，空串/跨行/前面没有字形时不成立，
          按普通字符处理（不吞用户输入）。 */
       if (ch === rOpen && i + 1 < src.length) {
@@ -625,10 +625,10 @@
     var nCols = colDefs.length;
     var toks = tokenize(text, t);
     var nopSet = setOf(t.text_comma_nop), rotSet = setOf(t.text_comma_90);
-    /* 强调标点：独立参数，缺省回落正文（与 accent_* 样式参数同策略） */
+    /* 批文标点：独立参数，缺省回落正文（与 accent_* 样式参数同策略） */
     var anopSet = setOf(t.accent_comma_nop || t.text_comma_nop), arotSet = setOf(t.accent_comma_90 || t.text_comma_90);
     var aModeP = String(t.accent_comma_mode || t.text_comma_mode || 'full');
-    var aHangP = (aModeP === 'hang' || aModeP === 'judou');   // 强调：句读与悬空同路
+    var aHangP = (aModeP === 'hang' || aModeP === 'judou');   // 批文：句读与悬空同路
     var cnopSetP = setOf(t.comment_comma_nop), crotSetP = setOf(t.comment_comma_90);
     var cModeP = String(t.comment_comma_mode || 'full');
     var cHangP = (cModeP === 'hang' || cModeP === 'judou');   // 夹注：句读与悬空同路
@@ -833,11 +833,11 @@
         var acs = tk.chars;
         for (var ai = 0; ai < acs.length; ai++) {
           var ac = acs[ai];
-          /* 强调段内的换行：与正文一致触发换列（而非被当字形画成空格）。
+          /* 批文段内的换行：与正文一致触发换列（而非被当字形画成空格）。
              源文本里的 \n 在 tokenizer 被整段切进 accent.chars，未转成 br token，
              故在此显式处理——与顶层 \n→br→nextCol 行为对齐 */
           if (ac === '\n') { nextCol(); continue; }
-          if (typeof ac === 'object') {        // 徽标（{}）在强调段内仍可用
+          if (typeof ac === 'object') {        // 徽标（{}）在批文段内仍可用
             var abn = String(ac.badge).length;
             var abSz = num(t.badge_size, 0) > 0 ? num(t.badge_size, 0) : m.fontSize * 0.72;
             var abspan = Math.max(1, Math.ceil(abSz * (abn + 0.32) / m.cellH - 1e-9));
@@ -1301,7 +1301,7 @@
     var cnopSet = setOf(t.comment_comma_nop), crotSet = setOf(t.comment_comma_90);
     var tnopSet = setOf(t.text_comma_nop), trotSet = setOf(t.text_comma_90);
     var fontT = familyStack(t.text_font_family);
-    /* 强调样式（[] 包裹片段）：默认 = 正文字体 + 正文字号×0.9 + 正文颜色；可被 accent_* 覆盖 */
+    /* 批文样式（[] 包裹片段）：默认 = 正文字体 + 正文字号×0.9 + 正文颜色；可被 accent_* 覆盖 */
     var accentFont = familyStack(t.accent_font_family || t.text_font_family);
     var accentFs = num(t.accent_font_size, fs * 0.9);
     var accentColor = t.accent_font_color || t.text_font_color;
@@ -1362,7 +1362,7 @@
         continue;
       }
 
-      /* --- 正文字符 / 强调字符（[]） --- */
+      /* --- 正文字符 / 批文字符（[]） --- */
       if (it.type === 'char') {
         var isAcc = !!it.accent;
         var aFs = isAcc ? accentFs : fs;
@@ -1370,7 +1370,7 @@
         var aCol = isAcc ? accentColor : t.text_font_color;
         var aPCol = isAcc ? (t.accent_comma_color || accentColor) : (num(t.text_comma_zhu, 0) ? ZHU : commaColor);
         var y = m.rowStartY + (it.row + 0.5) * m.cellH;
-        if (isAcc) y += num(t.accent_letter_spacing, 0) * aFs;   // 强调段字距（竖排下为纵向间隙）
+        if (isAcc) y += num(t.accent_letter_spacing, 0) * aFs;   // 批文段字距（竖排下为纵向间隙）
         /* 汉字墨迹居中补偿：字形 y 上移 δ×字号（em 框中心 → 汉字墨迹中心）。
            只改字形落位；prevGY（悬空标点挂靠基准）保持未补偿 —— 标点系统的 0.36 偏移是按真实
            渲染调出的经验值、其墨迹本就落在格心，故两者仍然对齐。 */

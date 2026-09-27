@@ -141,7 +141,7 @@ const gGrid: SchemaGroup = { id: 'grid', title: '字格（每列字数 · 行列
   { k: 'row_start_y', lb: '行起始线 Y', type: 'num', min: 0, max: 3000, step: 5, unit: 'px', show: s => !s.row_start_auto },
   { k: 'row_end_auto', lb: '结束线自动', type: 'bool' },
   { k: 'row_delta_y', lb: '末字留白', type: 'num', min: 0, max: 300, step: 5, unit: 'px', show: s => s.row_end_auto },
-  { k: 'wrap_indent', lb: '回行缩进', type: 'seg', opts: [['0', '无'], ['1', '空1字'], ['2', '空2字']], tip: '段首（显式换列 br/章节/% $ &）顶格；回行（正文·强调·夹注自然溢出续列）列头空 N 字格。夹注续列同属溢出续列一并空 N。仅影响续列起始位置，不改字号、标点与末字留白' },
+  { k: 'wrap_indent', lb: '回行缩进', type: 'seg', opts: [['0', '无'], ['1', '空1字'], ['2', '空2字']], tip: '段首（显式换列 br/章节/% $ &）顶格；回行（正文·批文·夹注自然溢出续列）列头空 N 字格。夹注续列同属溢出续列一并空 N。仅影响续列起始位置，不改字号、标点与末字留白' },
   { k: 'row_end_y', lb: '行结束线 Y', type: 'num', min: 0, max: 3000, step: 5, unit: 'px', show: s => !s.row_end_auto },
   { k: 'text_size_auto', lb: '字号自动', type: 'bool', tip: '字号 = 行高 ÷ (每列字数 × 字距比例)；字格恒锁 = 行高 ÷ 每列字数' },
   { k: 'text_size_fitcol', lb: '字号受限列宽', type: 'bool', show: s => s.text_size_auto },
@@ -166,12 +166,12 @@ const gComment: SchemaGroup = { id: 'comment', title: '夹注（双行小字）'
   { k: 'comment_font_color', lb: '夹注颜色', type: 'color' },
 ]}
 
-/* 八·强调（逗号类标点收口到「标点处理」组，此处只留样式） */
-const gAccent: SchemaGroup = { id: 'accent', title: '强调样式（[] 标记）', open: 0, items: [
-  { k: 'accent_font_family', lb: '强调字体', type: 'fam', tip: '缺省 = 正文字体（[] 包裹内容默认同正文，字号 ×0.9）' },
-  { k: 'accent_font_size', lb: '强调字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', tip: '缺省 = 正文字号 × 0.9' },
-  { k: 'accent_font_color', lb: '强调颜色', type: 'color', tip: '缺省 = 正文颜色' },
-  { k: 'accent_letter_spacing', lb: '强调字距', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字', tip: '竖排下为字间纵向间隙，0 = 无' },
+/* 八·批文（逗号类标点收口到「标点处理」组，此处只留样式） */
+const gAccent: SchemaGroup = { id: 'accent', title: '批文样式（[] 标记）', open: 0, items: [
+  { k: 'accent_font_family', lb: '批文字体', type: 'fam', tip: '缺省 = 正文字体（[] 包裹内容默认同正文，字号 ×0.9）' },
+  { k: 'accent_font_size', lb: '批文字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', tip: '缺省 = 正文字号 × 0.9' },
+  { k: 'accent_font_color', lb: '批文颜色', type: 'color', tip: '缺省 = 正文颜色' },
+  { k: 'accent_letter_spacing', lb: '批文字距', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字', tip: '竖排下为字间纵向间隙，0 = 无' },
 ]}
 
 /* 九·章节标题 */
@@ -226,11 +226,11 @@ const gRuby: SchemaGroup = { id: 'ruby', title: '注音（^拼音^ 标记）', o
   { k: 'ruby_color', lb: '注音颜色', type: 'color', show: s => Number(s.ruby_show) !== 0,
     tip: '留空 = 跟随正文颜色' },
   { k: 'tag_ruby', lb: '注音标记符', type: 'text',
-    tip: '成对的两个符号，默认 ^^ —— 正文写作 `字^pīn^`，注音挂在该字上方；夹注/强调内部不解析' },
+    tip: '成对的两个符号，默认 ^^ —— 正文写作 `字^pīn^`，注音挂在该字上方；夹注/批文内部不解析' },
 ]}
 
-/* 十二·标点处理（统一收口：正文·夹注·强调 三处的逗号类标点机制合并于此） */
-const gPunc: SchemaGroup = { id: 'punc', title: '标点处理（正文 · 夹注 · 强调 统一）', open: 0, items: [
+/* 十二·标点处理（统一收口：正文·夹注·批文 三处的逗号类标点机制合并于此） */
+const gPunc: SchemaGroup = { id: 'punc', title: '标点处理（正文 · 夹注 · 批文 统一）', open: 0, items: [
   { k: 'text_comma_mode', lb: '正文标点', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '全角占1位；悬空小字贴前字右下角不占位；句读=古籍圈点（，、；：→读点、。！？→句圈，恒按悬空不占格）；无=白文。此档只管正文行文，章节标题不受影响——章题标点恒整格原样' },
   { k: 'text_comma_pos', lb: '正文标点位', type: 'seg', opts: [['right', '居右'], ['center', '居中']], tip: '居右=字格右侧、与上字自动留隙（默认）；居中=墨迹落字格中央' },
   { k: 'text_comma_zhu', lb: '正文朱色', type: 'bool', tip: '套印本句读圈点：正文标点染朱色' },
@@ -238,7 +238,7 @@ const gPunc: SchemaGroup = { id: 'punc', title: '标点处理（正文 · 夹注
   { k: 'comment_comma_pos', lb: '夹注标点位', type: 'seg', opts: [['right', '居右'], ['center', '居中']], tip: '居右=注字格右侧、行距自适应留隙（默认）；居中=墨迹落注字格中央' },
   { k: 'comment_comma_zhu', lb: '夹注朱色', type: 'bool' },
   { k: 'comment_comma_fullwidth', lb: '夹注半角转全角', type: 'bool' },
-  { k: 'hang_scale', lb: '悬空·标点大小', type: 'num', min: 0.1, max: 1, step: 0.02, unit: '×', tip: '句读模式下同时作为「读点（、）」大小；也是夹注末字后小字标点（挤挂）的大小——夹注只在挤挂能省下正文字位时才挤挂。正文/强调的避头不走这里：闭号按「标点压缩」全尺寸排进列底余白（装不下才自动等比缩）' },
+  { k: 'hang_scale', lb: '悬空·标点大小', type: 'num', min: 0.1, max: 1, step: 0.02, unit: '×', tip: '句读模式下同时作为「读点（、）」大小；也是夹注末字后小字标点（挤挂）的大小——夹注只在挤挂能省下正文字位时才挤挂。正文/批文的避头不走这里：闭号按「标点压缩」全尺寸排进列底余白（装不下才自动等比缩）' },
   { k: 'jd_ring_scale', lb: '句读·句圈直径', type: 'num', min: 0.1, max: 1, step: 0.02, unit: '×' },
   { k: 'jd_ring_stroke', lb: '句读·句圈线宽', type: 'num', min: 0, max: 0.2, step: 0.01, unit: '×', tip: '0 = 实心圈' },
   { k: 'text_hang_x', lb: '正文悬空·横移', type: 'num', min: -1, max: 1, step: 0.01, unit: '×字' },
@@ -250,11 +250,11 @@ const gPunc: SchemaGroup = { id: 'punc', title: '标点处理（正文 · 夹注
   { k: 'text_comma_90', lb: '正文·竖排标点字符', type: 'text', tip: '如 「」（）《》…— 等用字体竖排字形（vert）立起来的标点；闭号（》」）另受避头点保护不居列首——列满时按「标点压缩」排到末字之后、列底余白里，全尺寸（余白装不下才等比缩），不占列内格、不增列不增页。「无标点」模式下整组不渲染、不占格' },
   { k: 'comment_comma_nop', lb: '夹注·不占位字符', type: 'text', tip: '同正文，作用于夹注内部' },
   { k: 'comment_comma_90', lb: '夹注·竖排标点字符', type: 'text', tip: '同正文，作用于夹注内部' },
-  { k: 'accent_comma_mode', lb: '强调标点模式', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '缺省 = 跟随正文标点模式；可独立设置强调段标点（统一收口至「标点处理」组）' },
-  { k: 'accent_comma_color', lb: '强调标点颜色', type: 'color', tip: '缺省 = 强调颜色（与文字同色）；填朱色 #a8322a 即朱印标点' },
-  { k: 'accent_comma_nop', lb: '强调·不占位字符', type: 'text', tip: '缺省 = 与正文同字符集（、，。：；！？）' },
-  { k: 'accent_comma_90', lb: '强调·竖排标点字符', type: 'text', tip: '缺省 = 与正文同字符集（「」〔〕…（）类），使用字体竖排字形（vert）立起来' },
-  { k: 'accent_comma_fullwidth', lb: '强调半角转全角', type: 'bool', tip: '缺省 = 开启；将强调段内半角标点转全角' },
+  { k: 'accent_comma_mode', lb: '批文标点模式', type: 'seg', opts: [['full', '全角'], ['hang', '悬空'], ['judou', '句读'], ['none', '无']], tip: '缺省 = 跟随正文标点模式；可独立设置批文段标点（统一收口至「标点处理」组）' },
+  { k: 'accent_comma_color', lb: '批文标点颜色', type: 'color', tip: '缺省 = 批文颜色（与文字同色）；填朱色 #a8322a 即朱印标点' },
+  { k: 'accent_comma_nop', lb: '批文·不占位字符', type: 'text', tip: '缺省 = 与正文同字符集（、，。：；！？）' },
+  { k: 'accent_comma_90', lb: '批文·竖排标点字符', type: 'text', tip: '缺省 = 与正文同字符集（「」〔〕…（）类），使用字体竖排字形（vert）立起来' },
+  { k: 'accent_comma_fullwidth', lb: '批文半角转全角', type: 'bool', tip: '缺省 = 开启；将批文段内半角标点转全角' },
 ]}
 
 /* 十三·版心堂号 */
@@ -298,7 +298,7 @@ export const SCHEMA: SchemaGroup[] = [
 /* ---------------- 4 簇聚类（渲染用） ---------------- */
 /* 一个版面 = 页面版框 + 版心内容 + 内容样式 + 叠加装饰
    版心内容 = 版心样式（版界 · 中缝 · 分割线 · 鱼尾）+ 版心文字（书名 · 卷次 · 页码）
-   内容样式 = 界行内容（字格 · 正文 · 夹注 · 强调 · 章节 · 徽标 · 注音 · 标点） */
+   内容样式 = 界行内容（字格 · 正文 · 夹注 · 批文 · 章节 · 徽标 · 注音 · 标点） */
 export const CLUSTERS: SchemaCluster[] = [
   {
     id: 'c1', title: '一·页面版框', open: 1,

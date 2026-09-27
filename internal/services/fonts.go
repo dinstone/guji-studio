@@ -211,9 +211,11 @@ func fontIndexOf() map[string]fontEntry {
 func (s *FontService) OpenFont(family string) (FontBlob, error) {
 	e, ok := fontIndexOf()[family]
 	if !ok {
-		/* 找不到族**不是错误**：新版 macOS 的部分系统字体（如楷体 Kaiti SC）不在 fontDirs 的
-		 * 四个目录里，由系统字体服务提供，索引里天然没有；而 SVG 图片文档里写系统族名照样能画。
-		 * 调用方（导出的字体内联）拿到 Size/Chunks 为 0 的 blob 跳过内联即可——返回 error
+		/* 找不到族**不是错误**：新版 macOS 的部分系统字体（如楷体 Kaiti SC）是「按需下载
+		 * 字体」，磁盘上只有 FontServices 私有目录里 18 个字形的占位文件，fontDirs 扫不到
+		 * 真字体，索引里天然没有。注意：SVG 图片文档里**解析不到系统族名**（全部回退默认
+		 * 宋体），所以前端 embedFonts 会沿 font-family 栈下挖、改内联栈里第一个取得到的族
+		 * （楷体栈里即 Microsoft KaiTi）——这里返回空 blob 即触发那条路径。返回 error
 		 * 只会让 Wails 在控制台打一行 ERR，把真正的问题淹掉。 */
 		return FontBlob{Family: family}, nil
 	}

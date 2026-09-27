@@ -10,7 +10,7 @@ import { fontVertSupported, isGenericFont } from './fontfeature'
 const FONT_ROLE: Record<string, string> = {
   text_font_family: '正文',
   comment_font_family: '夹注',
-  accent_font_family: '强调',
+  accent_font_family: '批文',
   title_font_family: '书名',
   pager_font_family: '页码',
   ruby_font_family: '注音',

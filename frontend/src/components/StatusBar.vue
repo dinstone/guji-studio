@@ -56,7 +56,7 @@ import { groupNum } from '../core/textstat'
         <span class="dot">·</span>
         <span>夹注 <b>{{ previewLayout.commentFamily }} {{ previewLayout.commentSize }}</b></span>
         <span class="dot">·</span>
-        <span>强调 <b>{{ previewLayout.accentFamily }} {{ previewLayout.accentSize }}</b></span>
+        <span>批文 <b>{{ previewLayout.accentFamily }} {{ previewLayout.accentSize }}</b></span>
       </div>
     </div>
   </footer>

@@ -70,7 +70,7 @@ function buildExtensions() {
        用 Prec.highest + 排在 basicSetup 之前，保证先于 defaultKeymap 匹配。 */
     markerGuardKeymap,
     basicSetup,
-    /* 不挂 `markdown()`：源文是自定义古籍 DSL（`[..]` 强调 / `{..}` 徽标 / `【..】` 夹注 / `#` 章题），
+    /* 不挂 `markdown()`：源文是自定义古籍 DSL（`[..]` 批文 / `{..}` 徽标 / `【..】` 夹注 / `#` 章题），
        与 markdown 语法直接撞车——lezer-markdown 把 `[任意内容]`（无 `(url)` 也算）判为 Link，
        basicSetup 的 defaultHighlightStyle 给 tags.link / tags.heading 加 `textDecoration: underline`
        （且不改颜色），于是源码态下 `[]` 包住的段落通体黑下划线、`#` 章题被加粗划线。
@@ -168,11 +168,11 @@ const MARKS: Mark[] = [
   { label: '@',  title: '占一格空白', kind: 'char', open: '@' },
   { label: '【】', title: '夹注',     kind: 'wrap', open: '【', close: '】' },
   { label: '{}',  title: '注释徽标',  kind: 'wrap', open: '{', close: '}' },
-  { label: '[]',  title: '强调样式（[] 包裹片段）', kind: 'wrap', open: '[', close: ']' },
+  { label: '[]',  title: '批文样式（[] 包裹片段）', kind: 'wrap', open: '[', close: ']' },
   { label: '%',  title: '换页标记（在光标处另起一张纸）', kind: 'insert', open: '%' },
   { label: '$',  title: '半页标记（跳至下半叶）', kind: 'insert', open: '$' },
   { label: '拼音', title: '注音：给选中文字逐字加拼音（生成 字^pīn^ 标记）', kind: 'ruby', open: '' },
-  { label: '清除格式', title: '清除格式：去掉选区内全部标记（# 标题、夹注【】、徽标{}、强调[]、注音、@%$&~），保留文字', kind: 'clear', open: '' },
+  { label: '清除格式', title: '清除格式：去掉选区内全部标记（# 标题、夹注【】、徽标{}、批文[]、注音、@%$&~），保留文字', kind: 'clear', open: '' },
 ]
 /* 注音标记符取当前单元的生效值（与引擎解析口径一致） */
 function rubyTag(): string { return String(tplEdit.tag_ruby || '^^') }
@@ -243,7 +243,7 @@ async function insert(m: Mark) {
     const txt = state.sliceDoc(sel.from, sel.to)
     const out = m.open + txt + (m.close || '')
     changes.push({ from: sel.from, to: sel.to, insert: out })
-    // 有选中：光标停在包裹后文本末尾；无选中：落入括号内，便于直接输入强调内容
+    // 有选中：光标停在包裹后文本末尾；无选中：落入括号内，便于直接输入批文内容
     anchor = hasSel ? sel.from + out.length : sel.from + m.open.length
   }
   cm.dispatch({ changes, selection: { anchor } })
@@ -266,7 +266,7 @@ async function insert(m: Mark) {
             <button :class="{ on: !tocDerived }" title="手动：目录正文可直接编辑，落盘到 guide/目录.txt" @click="setTocDerived(false)">手动</button>
           </span>
           <button class="beauty" :class="{ on: beautify }" @click="toggleBeautify"
-            :title="beautify ? '美化：隐藏标记符并把注音/夹注/强调/徽标渲染成对应样式' : '源码：显示全部原始标记'">{{ beautify ? '美化' : '源码' }}</button>
+            :title="beautify ? '美化：隐藏标记符并把注音/夹注/批文/徽标渲染成对应样式' : '源码：显示全部原始标记'">{{ beautify ? '美化' : '源码' }}</button>
         </div>
       </div>
       <!-- 第二层工具栏：编辑按钮；派生目录换成「条目来源」切换（正文自动生成，无标记可编） -->
@@ -351,8 +351,8 @@ async function insert(m: Mark) {
 <style>
 /* 五类语义色（美化态专用，彼此不撞色）：
      正文 #2c2c2a（继承 body）· 标题/二级标题 朱红 #9e2b25 · 夹注 赭石 #8a6d3b
-     · 强调 松绿 #1a7f37 · 徽标 靛蓝 #2f4a9e
-   注意美化态是「语义色编码」，与书页实际输出无关——书页默认里标题/正文/夹注/强调全是黑，
+     · 批文 松绿 #1a7f37 · 徽标 靛蓝 #2f4a9e
+   注意美化态是「语义色编码」，与书页实际输出无关——书页默认里标题/正文/夹注/批文全是黑，
    只有徽标是朱红（badge_color）。因此配色目标是**五类互不撞色**，不是复刻书页。
    徽标原先用橙 #b35c00，与夹注赭石、标题朱红挤在同一暖色家族里难以分辨；
    改用五色中唯一的冷色，并放大到与正文同字号 + 加粗 + 描边药丸，一眼可从正文里挑出。 */

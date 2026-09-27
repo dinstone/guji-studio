@@ -19,6 +19,14 @@
  *   现在改为**先按字符集做字形子集再内联**（fontSubset.ts）：实测 10.74MB → 345KB，
  *   一本 17 叶的书从「每叶内联 5.11MB」降到约 0.5MB。闸门退化为子集化不可用时的兜底。
  *   不可直接换用外部 url 或 local()，两条在图片文档里都不生效（已验证）。
+ *
+ * 栈内下挖（2026-09-27 楷体案）：
+ *   图片文档里**没有任何系统字体解析**——连预装系统族也解析不到，全部落回默认宋体
+ *   （旧注释「系统族名照样能画」是错的，楷体导出变宋体即反例）。所以每条 font-family
+ *   栈都得有字节可内联。而新版 macOS 把 Kaiti SC/STKaiti 挪成按需下载字体，磁盘上只有
+ *   FontServices 里 18 个字形的占位文件，fontDirs 扫不到真字体，栈首取不到二进制——
+ *   故 embedFonts 改为**沿栈下挖**，内联第一个取得到的族（Microsoft KaiTi，
+ *   /Library/Fonts/Microsoft/Kaiti.ttf），并把栈中该成员（而非仅首项）换成别名。
  */
 
 import * as plat from '../platform/wails'
@@ -277,54 +285,86 @@ function parseStack(raw: string): string[] {
   return out.filter(Boolean)
 }
 
-/** 扫描 SVG 里每处 font-family 的**首项**族名（去重，保持出现顺序）。
- *  只取首项：引擎把「用户选的字体 + 一串系统 fallback」拼成单个栈（familyStack），
- *  若把 fallback 里的系统族也内联，等于给每叶塞进六七份字体，纯属浪费。 */
-function scanFamilies(svg: string): string[] {
-  const fams: string[] = []
+/** 扫描 SVG 里每处 font-family 的**完整栈**（按出现顺序去重）。
+ *  为什么需要整条栈而不止首项（2026-09-27 楷体案）：内置楷体栈是
+ *  'Kaiti SC','STKaiti','KaiTi',…——新版 macOS 把 Kaiti SC/STKaiti 挪成了「按需下载字体」，
+ *  磁盘上只有 FontServices 里 18 个字形的占位文件（fontDirs 扫不到真字体），栈首取不到二进制。
+ *  只试首项 → 楷体整条栈不内联 → 导出整族回退宋体。沿栈下挖到第一个取得到的族
+ *  （KaiTi，/Library/Fonts/Microsoft/Kaiti.ttf）内联它，导出才能保住楷体字形。 */
+function scanStacks(svg: string): string[][] {
+  const out: string[][] = []
+  const seen = new Set<string>()
   FAM_RE.lastIndex = 0
   let m: RegExpExecArray | null
   while ((m = FAM_RE.exec(svg))) {
-    const head = parseStack(m[2] ?? m[3] ?? '')[0]
-    if (head && !fams.includes(head)) fams.push(head)
+    const stack = parseStack(m[2] ?? m[3] ?? '')
+    const key = stack.join('\u0001')
+    if (stack.length && !seen.has(key)) { seen.add(key); out.push(stack) }
   }
-  return fams
+  return out
 }
 
 /** 重建单个族名：不是纯标识符就补引号（族名可含空格，如 Times New Roman、Songti SC）。 */
 const quoteFam = (s: string) => (/^[-\w]+$/.test(s) ? s : `'${s}'`)
 
-/** 把 font-family 栈里的内联族换成别名；首项不是内联族则原样返回。
- *  注意别名必须按族名规则补引号：`parseStack` 已把原引号剥掉，而别名可能含空格
- *  （GujiEmbed-Times New Roman），不补引号的 CSS 值会被拆成多个族名，内联永远匹配不上。 */
+/** 把 font-family 栈里**内联成功的族**换成别名；一个都不在 inline 集合则原样返回。
+ *  注意两点：
+ *  ① 别名必须按族名规则补引号：`parseStack` 已把原引号剥掉，而别名可能含空格
+ *   （GujiEmbed-Times New Roman），不补引号的 CSS 值会被拆成多个族名，内联永远匹配不上。
+ *  ② 换的是**栈中任意命中的成员**而不止首项（2026-09-27 楷体案）：栈首 Kaiti SC 取不到
+ *   二进制、保持原名（图片文档里解析不到，自然落空），浏览器按栈序走到已换成别名的
+ *   KaiTi 成员，命中内联声明 —— 楷体就这样保住的。取不到的族**绝不能改名**：
+ *   文档里没有对应 @font-face，那批字会整片消失（比回退系统字体严重得多）。 */
 function swap(raw: string, inline: Set<string>): string | null {
   const parts = parseStack(raw)
-  if (!parts.length || !inline.has(parts[0])) return null
-  const out = parts.map((p, i) => quoteFam(i === 0 && inline.has(p) ? aliasOf(p) : p))
-  return out.join(',')
+  if (!parts.length || !parts.some(p => inline.has(p))) return null
+  return parts.map(p => quoteFam(inline.has(p) ? aliasOf(p) : p)).join(',')
 }
 
-/** 内联 SVG 里出现的所有非通用字体；内联失败的族保持原样。 */
+/** 内联 SVG 里出现的字体；每条 font-family 栈只内联「第一个取得到二进制的非通用族」，
+ *  取不到的族保持原样（浏览器在图片文档里解析不到它们，会按栈序落到内联别名上）。
+ *
+ *  为什么只内联每栈一个：栈尾的 fallback 族在栈首可用时永远轮不到，全内联等于给每叶
+ *  塞进六七份字体。为什么「沿栈下挖」（2026-09-27 楷体案）：栈首可能取不到二进制
+ *  （Kaiti SC/STKaiti 在新 macOS 是按需下载字体，磁盘无真字体文件），此时若整栈放弃，
+ *  导出就整族回退宋体；下挖到第一个取得到的族（如 Microsoft KaiTi）才能保住字形风格。 */
 export async function embedFonts(svg: string): Promise<string> {
-  const fams = scanFamilies(svg).filter(f => !GENERIC.has(f.toLowerCase()))
-  if (!fams.length) return svg
+  const stacks = scanStacks(svg)
+  if (!stacks.length) return svg
   /* 先并入本叶字符，再逐族取字体：子集裁的是「并入之后」的字符集，否则本叶**首次**出现的
    * 字会被裁掉（表现为该字没有字形，画成空白或方框——比回退字体严重得多）。 */
   noteCodepoints(svg)
 
   /* 只有**真的拿到字体二进制**的族才允许改名：若某族取失败却照样改写成别名，
    * 文档里就没有对应 @font-face，那些字会整片消失——比回退系统字体严重得多。 */
+  const faceMemo = new Map<string, Promise<string | null>>()
+  const faceOf = (f: string) => {
+    let p = faceMemo.get(f)
+    if (!p) { p = faceFor(f); faceMemo.set(f, p) }
+    return p
+  }
   const inline = new Set<string>()
   const faces: string[] = []
-  for (const f of fams) {
-    const r = await faceFor(f)
-    if (r) { faces.push(r); inline.add(f) }
+  const pushed = new Set<string>()
+  for (const stack of stacks) {
+    for (const f of stack) {
+      if (GENERIC.has(f.toLowerCase())) break // 通用族兜底维持原状，与旧行为一致
+      const r = await faceOf(f)
+      if (r) {
+        if (!pushed.has(f)) { pushed.add(f); faces.push(r) }
+        inline.add(f)
+        break // 本栈只需第一个可用族，栈尾 fallback 轮不到
+      }
+    }
   }
   if (!faces.length) return svg
 
   const sub = (m: string, q: string | undefined, raw: string) => {
     const s = swap(raw, inline)
-    return s == null ? m : `font-family=${q ?? ''}${s}${q ?? ''}`
+    if (s == null) return m
+    /* 属性写法（font-family="…"）按原引号重发；style 内写法（font-family:…）必须用冒号——
+     * 重发成等号是非法 CSS，整条声明会被浏览器丢弃（2026-09-27 修）。 */
+    return q === undefined ? `font-family:${s}` : `font-family=${q}${s}${q}`
   }
   let out = svg.replace(/font-family=(["'])((?:(?!\1)[^>])*)\1/g,
     (m, q: string, raw: string) => sub(m, q, raw))
@@ -438,7 +478,9 @@ const probeDone = new Map<string, Promise<boolean>>()
  *  「取不到二进制」，二者都由 faceFor 记录。 */
 export async function probeFonts(svg: string): Promise<boolean> {
   if (typeof document === 'undefined') return true
-  const fams = scanFamilies(svg).map(unaliasOf).filter(f => inlineB64.has(f))
+  /* 用完整栈扫描而非只看首项：内联族可能是栈中后位成员（Kaiti SC 案里的 KaiTi），
+   * 只扫首项会漏掉它们的预热。导出后的 SVG 里族名已带别名前缀，unaliasOf 反推回原族名。 */
+  const fams = [...new Set(scanStacks(svg).flat())].map(unaliasOf).filter(f => inlineB64.has(f))
   if (!fams.length) return true
   let ready = true
   for (const f of fams) {

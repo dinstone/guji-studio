@@ -5,7 +5,7 @@
  *
  * 与 editorDeco.ts 的装饰口径一致：
  *   - 标题：行首 #{1,2}\s*（与 engine / editorDeco 的标题判定一致）
- *   - 夹注： 【…】  / 徽标： {…} / 强调： […]
+ *   - 夹注： 【…】  / 徽标： {…} / 批文： […]
  *   - 注音： 字^pīn^（分隔符取自 tag_ruby，保留基字、去拼音）
  *   - 独立标记： @ % $ & ~（古籍 DSL 保留符，纯视觉噪音） */
 function pairOf(tag: string): [string, string] {
