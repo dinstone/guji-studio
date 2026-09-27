@@ -1220,7 +1220,8 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
         out.decor.push({ kind: 'leaf', x: cx - hw * 0.5, y: yc, r: r, color: color, side: -1, flip: flip ? 1 : 0 });
         out.decor.push({ kind: 'leaf', x: cx + hw * 0.5, y: yc, r: r, color: color, side: 1, flip: flip ? 1 : 0 });
       } else {
-        out.decor.push({ x: cx, y: yc, r: Math.min(bodyH * 0.26, hw * 0.3), color: color });
+        // 三个点：分布在版心宽的左 1/4 ↔ 右 1/4（圆心 cx ± 0.5·hw，2026-09-27 用户定）
+        out.decor.push({ x: cx, y: yc, r: Math.min(bodyH * 0.26, hw * 0.3), color: color, spread: hw * 0.5 });
       }
     }
 
@@ -1957,10 +1958,10 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
           '" fill="' + t.canvas_color + '" mask="url(#' + lmid + ')" transform="translate(' + f(d.x) + ' ' + f(d.y) + ')' +
           (d.flip ? ' rotate(' + f(-d.side * 45) + ') scale(1,-1)' : ' rotate(' + f(d.side * 45) + ')') + '"/>');
       } else {
-        // 三个点：圆心间距 2.4r（2026-09-27 用户定，原 1.5r 挤成一团）
-        o.push('<circle cx="' + f(d.x - d.r * 2.4) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
+        // 三个点：圆心横向 = ±spread（版心宽 1/4 处，随 decorFor 下发）
+        o.push('<circle cx="' + f(d.x - d.spread) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
         o.push('<circle cx="' + f(d.x) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
-        o.push('<circle cx="' + f(d.x + d.r * 2.4) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
+        o.push('<circle cx="' + f(d.x + d.spread) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
       }
     }
 
