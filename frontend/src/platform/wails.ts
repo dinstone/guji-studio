@@ -12,6 +12,8 @@ import * as FontSvc from '../../bindings/gujistudio/internal/services/fontservic
 import * as TplSvc from '../../bindings/gujistudio/internal/services/templateservice.js'
 // @ts-ignore
 import * as PrintSvc from '../../bindings/gujistudio/internal/services/printservice.js'
+// @ts-ignore
+import * as CloseGateSvc from '../../bindings/gujistudio/internal/services/closegateservice.js'
 
 /** 文章池中的一篇文章（归一化）：文件名由 title 派生（<title>.txt，重名 -2） */
 export interface ChapterFull { id: string; title: string; text: string }
@@ -203,6 +205,12 @@ export async function openExternal(url: string): Promise<void> {
   } catch {
     window.open(url, '_blank', 'noopener')
   }
+}
+
+/* 关闭闸门回话：前端 flushSave 完成后调用，Go 侧放行窗口关闭（见 services/lifecycle.go）。
+ * 超时不会报错给用户——Go 看门狗 4s 后无论如何放行，这里失败只说明窗口可能已销毁。 */
+export async function confirmClose(): Promise<void> {
+  return (CloseGateSvc as any).ConfirmClose()
 }
 
 /** 导入文件结果：name = 去扩展名的文件名（作章节标题），content = UTF-8 文本 */

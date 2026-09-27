@@ -33,6 +33,7 @@ func main() {
 			application.NewService(&services.TemplateService{}),
 			application.NewService(&services.UpdateService{}),
 			application.NewService(&services.PrintService{}),
+			application.NewService(&services.CloseGateService{}),
 		},
 		// 注册 .gvs 文件关联：双击项目文件即可在 GujiStudio 打开
 		FileAssociations: []string{".gvs"},
@@ -116,6 +117,9 @@ func main() {
 		app.Event.Emit("files-dropped", map[string]any{"files": files})
 	})
 
+	// 关闭闸门：首次点关闭先拦下，通知前端 flushSave 后再放行（防 3s 自动保存窗口内退出丢改动）
+	services.InstallCloseGate(app, win)
+
 	// 双击 .gvs 文件关联启动：缓存路径并通知前端（应用已运行则直接弹事件；
 	// 冷启动时前端尚未订阅，路径由 services.TakePendingOpen 兜底）
 	app.Event.OnApplicationEvent(events.Common.ApplicationOpenedWithFile, func(e *application.ApplicationEvent) {
@@ -152,7 +156,13 @@ func setupAppMenu(app *application.App, win *application.WebviewWindow) {
 		appSub.AddRole(application.UnHide)
 		appSub.AddSeparator()
 	}
-	appSub.AddRole(application.Quit)
+	// 退出菜单不用 AddRole(Quit)：App.Quit() 直接销毁应用、绕过窗口关闭事件，
+	// 会跳过关闭闸门（丢 3s 自动保存窗口内的改动）。改为 win.Close() 统一进闸门。
+	quitItem := appSub.Add("退出 Guji Studio")
+	quitItem.SetAccelerator("CmdOrCtrl+Q")
+	quitItem.OnClick(func(_ *application.Context) {
+		win.Close()
+	})
 	m.AddRole(application.FileMenu)
 	m.AddRole(application.EditMenu)
 	m.AddRole(application.ViewMenu)

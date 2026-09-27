@@ -1245,8 +1245,9 @@ watch(() => proj.name, () => { if (suppressDirty) return; dirty.book = true; sav
 watch(() => proj.meta, () => { if (suppressDirty) return; dirty.book = true; saveState.value = 'dirty' }, { deep: true })
 watch(tpl, () => { if (suppressDirty) return; dirty.book = true; saveState.value = 'dirty' }, { deep: true })
 watch(bookSpecial, () => { if (suppressDirty) return; dirty.book = true; saveState.value = 'dirty' }, { deep: true })
-// 出版 → publish.json
-watch(proj.pubs, () => { if (suppressDirty) return; dirty.publish = true; saveState.value = 'dirty' }, { deep: true })
+// 出版 → publish.json。source 必须用 getter：applyFlat 打开项目时 proj.pubs 会被整体替换，
+// 直接 watch(proj.pubs) 绑死旧数组，替换后 add/delete/rename 册全部失聪（2026-09-27 删册复活 bug 根因）
+watch(() => proj.pubs, () => { if (suppressDirty) return; dirty.publish = true; saveState.value = 'dirty' }, { deep: true })
 // 章/卷结构 + 正文 → 细粒度 diff（只标真正变更的章 id / 结构变化）
 watch(() => proj.tree.scrolls, diffScrolls, { deep: true })
 // 固定单元（序/目录/跋/牌记）→ 细粒度 diff
@@ -1385,6 +1386,12 @@ export async function watchExternalOpen() {
     })
     // 系统菜单「关于 Guji Studio」点击 → 打开应用内「关于 / 赞助」对话框
     Events.On('open-about', () => openAbout())
+    // 关闭闸门（Go 侧 lifecycle.go）：用户点关闭被拦下后发来此事件——立即全量落盘再回话放行。
+    // 回话失败不提示（Go 看门狗 4s 兜底放行，失败多因窗口已在销毁）。
+    Events.On('app:close-requested', async () => {
+      try { await flushSave() } catch { /* 保存失败也要放行，别困住用户 */ }
+      try { await plat.confirmClose() } catch { /* 同上 */ }
+    })
     // 后台自动检查发现新版本 → 回取完整结果并打开更新弹窗（含赞赏码）
     Events.On('updater:available', async () => {
       try {
