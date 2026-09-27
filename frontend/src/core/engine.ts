@@ -7,6 +7,8 @@
 // @ts-nocheck — 原型期纯 JS 迁入，暂不做全量类型化；UI 迁移期逐步补接口类型
 'use strict';
 
+import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
+
   var FONT_STACKS = {
     song_sc: "'Songti SC','STSong','SimSun','Noto Serif CJK SC',serif",
     /* song_tc 优先 Songti SC：实测 Songti TC / PMingLiU 的竖排标点（vert 替换字形）
@@ -136,13 +138,13 @@
     seam_top_linewidth: 18, seam_btm_linewidth: 18,
     /* 鱼尾 */
     fish_mode: 'double',       // none | single | double
-    fish_shape: 'flower',    // triangle | arc | flower
-    fish_decor: 1,
+    fish_shape: 'flower',    // triangle | arc | swallow | flower（鱼身固定 30px 黑条通用，尾形各异）
+    fish_decor: 1,           // 旧 bool 值：1=随形状默认（花瓣→三叶草、其余→三个点）；新值 none|clover|dots
     fish_top_y: 600, fish_top_color: '#1a1a1a',
-    fish_top_rectheight: 66, fish_top_triaheight: 40,
+    fish_top_triaheight: 40,
     fish_btm_y: 1907, fish_btm_color: '#1a1a1a',   // 下鱼尾：固定尖朝上（删除方向开关）
-    fish_btm_rectheight: 66, fish_btm_triaheight: 40,
-    fish_mid_direction: 0, fish_mid_pos: 0.5, fish_mid_rectheight: 66, fish_mid_triaheight: 40, fish_mid_color: '#1a1a1a',   // 中鱼尾（仅三鱼尾）：direction 0 朝下（默认，同上下鱼尾）| 1 朝上；pos = 内容区高度比例 0..1
+    fish_btm_triaheight: 40,
+    fish_mid_direction: 0, fish_mid_pos: 0.5, fish_mid_triaheight: 40, fish_mid_color: '#1a1a1a',   // 中鱼尾（仅三鱼尾）：direction 0 朝下（默认，同上下鱼尾）| 1 朝上；pos = 内容区高度比例 0..1
     /* 鱼尾 / 书名 / 页码 纵向定位：1=随内容区自动（换纸张高度时鱼尾贴内框、书名/页码按比例落位），0=用下方绝对值 */
     fish_auto: 0, title_y_auto: 1, pager_y_auto: 1,   // 书名默认 0.20（上—中）、页码默认 0.70（卷次下）
     /* 自动档的「离内框留白」（px）：fish_top_pad 自上内框下移、fish_btm_pad 自下内框上移。
@@ -1119,9 +1121,9 @@
   }
 
   /**
-   * 鱼尾 = 单块五边形（vRain 口径）+ 花饰（自身不带横线）
-   * 宽边贴基线，自尾侧向内挖 V 口：两瓣垂/翘 d1+d2，凹口底仅 d1（d1=鱼身高，d2=鱼尾高；
-   * d1=0 时退化为实心三角）。位置基准为上/下分割线 Y，若该处存在横线（分割线），则空 SEAM_GAP 紧贴。
+   * 鱼尾 = 鱼身（固定 30px 黑条，鱼尾自带、承载花饰，不可调）+ 尾形（无缝衔接于鱼身远端）。
+   * 鱼尾高 = triaheight（花瓣尾为冠形深度）——唯一可调的纵向尺寸。
+   * 位置基准为上/下分割线 Y，若该处存在横线（分割线），则空 SEAM_GAP 紧贴。
    * 下鱼尾默认对鱼尾（direction=1）：底边贴下横线（分割线），两瓣翘上、凹口朝下；
    * direction=0 为顺鱼尾：与上鱼尾同形，悬挂于下横线（分割线）之下。
    */
@@ -1129,15 +1131,20 @@
     var cx = m.centerX, hw = Math.max(4, m.centerW) / 2;   // 鱼尾宽 = 版界宽
     var x0 = cx - hw, x1 = cx + hw;
     var shape = t.fish_shape, parts = [];
+    var fishBodyH = 30;   // 鱼身黑条固定高：承载花饰，与尾形一体（旧 rectheight 参数已废，存于旧模板中的值被忽略）
 
-    /* 鱼尾本体：基线 y 上、朝 dir 方向伸出，凹口深 d1、两瓣深 d1+d2 */
-    function notch(y, d1, d2, dir) {
+    /* 尾形：基线 y 上、朝 dir 方向伸出 d2（triaheight）。四形状：
+     * 三角 = 经典鱼尾五边形（两瓣达 d2、直边 V 口深 0.45·d2）；
+     * 弧形 = 同布局、凹口两侧内凹圆弧；燕尾 = 深叉（V 口直回基线，全开）；
+     * 花瓣 = 冠形（外缘三尖两凹弧）。旧版五边形把鱼身并入凹口（d1=rectheight），现已废。
+     */
+    function notch(y, d2, dir) {
       var sgn = dir === 'down' ? 1 : -1;
       function Y(v) { return f(y + sgn * v); }
+      if (d2 <= 0) return null;
       if (shape === 'flower') {
-        // 花鱼尾：冠形——直边贴基线，外缘三尖两凹弧（尖朝 dir），深度取 d2
+        // 花瓣：冠形——直边贴基线，外缘三尖两凹弧（尖朝 dir），深度取 d2
         var hh = d2;
-        if (hh <= 0) return null;
         var w = x1 - x0;
         function X(r) { return f(x0 + w * r); }
         return 'M ' + f(x0) + ' ' + f(y) +
@@ -1148,19 +1155,24 @@
           ' Q ' + X(0.83) + ' ' + Y(hh * 0.16) + ' ' + f(x1) + ' ' + Y(hh) +
           ' L ' + f(x1) + ' ' + f(y) + ' Z';
       }
-      if (d1 + d2 <= 0) return null;
       if (shape === 'arc') {
-        // 弧形：同五边形布局，凹口两侧为内凹圆弧（两瓣 + 中央凹尖）
+        // 弧形：两瓣达 d2，凹口两侧为内凹圆弧（凹尖深 0.45·d2）
         return 'M ' + f(x0) + ' ' + f(y) + ' L ' + f(x1) + ' ' + f(y) +
-          ' L ' + f(x1) + ' ' + Y(d1 + d2) +
-          ' Q ' + f(cx) + ' ' + Y(d1 + d2) + ' ' + f(cx) + ' ' + Y(d1) +
-          ' Q ' + f(cx) + ' ' + Y(d1 + d2) + ' ' + f(x0) + ' ' + Y(d1 + d2) + ' Z';
+          ' L ' + f(x1) + ' ' + Y(d2) +
+          ' Q ' + f(cx) + ' ' + Y(d2) + ' ' + f(cx) + ' ' + Y(d2 * 0.45) +
+          ' Q ' + f(cx) + ' ' + Y(d2) + ' ' + f(x0) + ' ' + Y(d2) + ' Z';
       }
-      // 三角（vRain 五边形）：M 左上 → 右上 → 右瓣 → 凹口底 → 左瓣 → Z
+      if (shape === 'swallow') {
+        // 燕尾：深叉——两瓣尖角达 d2，V 口直回基线中心（全开）
+        return 'M ' + f(x0) + ' ' + f(y) + ' L ' + f(x1) + ' ' + f(y) +
+          ' L ' + f(x1) + ' ' + Y(d2) + ' L ' + f(cx) + ' ' + f(y) +
+          ' L ' + f(x0) + ' ' + Y(d2) + ' Z';
+      }
+      // 三角（经典鱼尾）：两瓣达 d2，直边 V 口深 0.45·d2
       return 'M ' + f(x0) + ' ' + f(y) + ' L ' + f(x1) + ' ' + f(y) +
-        ' L ' + f(x1) + ' ' + Y(d1 + d2) +
-        ' L ' + f(cx) + ' ' + Y(d1) +
-        ' L ' + f(x0) + ' ' + Y(d1 + d2) + ' Z';
+        ' L ' + f(x1) + ' ' + Y(d2) +
+        ' L ' + f(cx) + ' ' + Y(d2 * 0.45) +
+        ' L ' + f(x0) + ' ' + Y(d2) + ' Z';
     }
 
     var out = { top: null, btm: null, mid: null, decor: [], seam: null, seamBars: null };
@@ -1189,52 +1201,63 @@
       return y;
     }
 
-    // 花饰：花鱼尾用对生叶枝，其余形状用三孔
-    function decorFor(color, bodyY, bodyH) {
-      if (!t.fish_decor || bodyH <= 0) return;
-      if (shape === 'flower') {
-        var r = Math.min(bodyH * 0.34, hw * 0.26);
-        out.decor.push({ kind: 'leaf', x: cx - hw * 0.44, y: bodyY + bodyH * 0.52, r: r, color: color });
-        out.decor.push({ kind: 'leaf', x: cx + hw * 0.44, y: bodyY + bodyH * 0.52, r: r, color: color });
+    // 花饰：clover=三叶草（对生叶枝），dots=三个点（三孔）；旧 bool 值兼容
+    // （1/true = 随形状默认：花瓣→叶枝、其余→三孔；0/false = 无）
+    function decorKind() {
+      var dc = t.fish_decor;
+      if (dc == 1) return shape === 'flower' ? 'clover' : 'dots';
+      if (!dc) return 'none';
+      return dc === 'clover' || dc === 'dots' ? dc : 'none';
+    }
+    function decorFor(color, bodyY, bodyH, flip) {
+      var kind = decorKind();
+      if (kind === 'none' || bodyH <= 0) return;
+      // flip=1：尾形朝上（下鱼尾/朝上的中鱼尾）= 上鱼尾的上下反转，叶簇随之镜像
+      var yc = bodyY + bodyH * (flip ? 0.48 : 0.52);
+      if (kind === 'clover') {
+        var r = Math.min(bodyH * 0.55, hw * 0.28);
+        // 簇心横向 = 版心宽的一半的一半（cx ± 0.5·hw，2026-09-27 用户定）
+        out.decor.push({ kind: 'leaf', x: cx - hw * 0.5, y: yc, r: r, color: color, side: -1, flip: flip ? 1 : 0 });
+        out.decor.push({ kind: 'leaf', x: cx + hw * 0.5, y: yc, r: r, color: color, side: 1, flip: flip ? 1 : 0 });
       } else {
-        out.decor.push({ x: cx, y: bodyY + bodyH / 2, r: Math.min(bodyH * 0.26, hw * 0.3), color: color });
+        out.decor.push({ x: cx, y: yc, r: Math.min(bodyH * 0.26, hw * 0.3), color: color });
       }
     }
 
     if (mode !== 'none') {
-      // 上鱼尾：五边形宽边贴上横线（分割线）下侧、两瓣垂下（凹口朝下）
+      // 上鱼尾：鱼身贴上横线（分割线）下侧、尾形垂下（凹口朝下）
       var aT = anchorBelow(sg.topY);
-      var tRect = num(t.fish_top_rectheight, 0), tTri = num(t.fish_top_triaheight, 0);
+      var tRect = fishBodyH, tTri = num(t.fish_top_triaheight, 0);
       out.top = {
         color: t.fish_top_color,
-        body: shape === 'flower' && tRect > 0 ? { x: x0, y: aT, w: hw * 2, h: tRect } : null,
-        tri: shape === 'flower' ? notch(aT + tRect, 0, tTri, 'down') : notch(aT, tRect, tTri, 'down')
+        body: tRect > 0 ? { x: x0, y: aT, w: hw * 2, h: tRect } : null,
+        tri: notch(aT + tRect, tTri, 'down')
       };
       decorFor(t.fish_top_color, aT, tRect);
       if (mode === 'double' || mode === 'triple') {
         // 下鱼尾：固定尖朝上（对鱼尾），删除方向开关；双/三鱼尾共用
         var bLow = btmLow(sg.btmY);
-        var bRect = num(t.fish_btm_rectheight, 0), bTri = num(t.fish_btm_triaheight, 0);
+        var bRect = fishBodyH, bTri = num(t.fish_btm_triaheight, 0);
         out.btm = {
           color: t.fish_btm_color,
-          body: shape === 'flower' && bRect > 0 ? { x: x0, y: bLow - bRect, w: hw * 2, h: bRect } : null,
-          tri: shape === 'flower' ? notch(bLow - bRect, 0, bTri, 'up') : notch(bLow, bRect, bTri, 'up')
+          body: bRect > 0 ? { x: x0, y: bLow - bRect, w: hw * 2, h: bRect } : null,
+          tri: notch(bLow - bRect, bTri, 'up')
         };
-        decorFor(t.fish_btm_color, bLow - bRect, bRect);
+        decorFor(t.fish_btm_color, bLow - bRect, bRect, 1);
       }
       if (mode === 'triple') {
         // 中鱼尾：内容区中部，无横线（分割线）；方向可翻（默认朝下=同上鱼尾），位置用内容区高度比例
         var mY = m.content.y0 + m.content.h * clamp01(num(t.fish_mid_pos, 0.5), 0, 1);
         var mDir = num(t.fish_mid_direction, 0) === 1 ? 'up' : 'down';
-        var mRect = num(t.fish_mid_rectheight, 0), mTri = num(t.fish_mid_triaheight, 0);
+        var mRect = fishBodyH, mTri = num(t.fish_mid_triaheight, 0);
         var mBodyY = mDir === 'down' ? mY : mY - mRect;
-        var mTriBase = mDir === 'up' ? mBodyY : mBodyY + mRect;   // 花鱼尾：三角从 body 顶(朝上)或底(朝下)边无缝衔接，避免重叠
+        var mTriBase = mDir === 'up' ? mBodyY : mBodyY + mRect;   // 尾形从鱼身顶(朝上)或底(朝下)边无缝衔接，避免重叠
         out.mid = {
           color: t.fish_mid_color,
-          body: shape === 'flower' && mRect > 0 ? { x: x0, y: mBodyY, w: hw * 2, h: mRect } : null,
-          tri: shape === 'flower' ? notch(mTriBase, 0, mTri, mDir) : notch(mY, mRect, mTri, mDir)
+          body: mRect > 0 ? { x: x0, y: mBodyY, w: hw * 2, h: mRect } : null,
+          tri: notch(mTriBase, mTri, mDir)
         };
-        decorFor(t.fish_mid_color, mBodyY, mRect);
+        decorFor(t.fish_mid_color, mBodyY, mRect, mDir === 'up' ? 1 : 0);
       }
     }
     return out;
@@ -1919,20 +1942,25 @@
         '" height="' + f(g.mid.body.h) + '" fill="' + g.mid.color + '"/>');
       if (g.mid.tri) o.push('<path class="v-fish" d="' + g.mid.tri + '" fill="' + g.mid.color + '"/>');
     }
+    var leafMaskN = 0;
     for (i = 0; i < g.decor.length; i++) {
       var d = g.decor[i];
       if (d.kind === 'leaf') {
-        // 对生叶枝：两片尖叶呈 V 形（白色镂空）
-        o.push('<path class="v-fish v-leaf" d="M 0 ' + f(-d.r) + ' Q ' + f(d.r * 0.85) + ' ' + f(-d.r * 0.15) + ' 0 ' + f(d.r) +
-          ' Q ' + f(-d.r * 0.85) + ' ' + f(-d.r * 0.15) + ' 0 ' + f(-d.r) + ' Z" fill="' + t.canvas_color +
-          '" transform="translate(' + f(d.x - d.r * 0.55) + ' ' + f(d.y) + ') rotate(-38)"/>');
-        o.push('<path class="v-fish v-leaf" d="M 0 ' + f(-d.r) + ' Q ' + f(d.r * 0.85) + ' ' + f(-d.r * 0.15) + ' 0 ' + f(d.r) +
-          ' Q ' + f(-d.r * 0.85) + ' ' + f(-d.r * 0.15) + ' 0 ' + f(-d.r) + ' Z" fill="' + t.canvas_color +
-          '" transform="translate(' + f(d.x + d.r * 0.55) + ' ' + f(d.y) + ') rotate(38)"/>');
+        // 三叶草叶簇：素材位图（白叶黑底）作亮度蒙版镂空，左右两簇 ±45° 对斜；
+        // flip=1（尾形朝上的鱼尾）整体上下镜像：先翻转内容再反转旋转（translate·rotate(-θ)·scale(1,-1)）；
+        // 落在鱼身黑条外的「镂空」与纸色同色，视觉上自动隐形，无需再裁剪
+        leafMaskN++;
+        var S = d.r * 2.4, lmid = 'v-leafmask-' + leafMaskN;
+        o.push('<mask id="' + lmid + '" maskContentUnits="userSpaceOnUse">' +
+          '<image href="' + FISH_CLOVER_PNG + '" x="' + f(-S / 2) + '" y="' + f(-S / 2) + '" width="' + f(S) + '" height="' + f(S) + '"/></mask>');
+        o.push('<rect class="v-fish v-leaf" x="' + f(-S / 2) + '" y="' + f(-S / 2) + '" width="' + f(S) + '" height="' + f(S) +
+          '" fill="' + t.canvas_color + '" mask="url(#' + lmid + ')" transform="translate(' + f(d.x) + ' ' + f(d.y) + ')' +
+          (d.flip ? ' rotate(' + f(-d.side * 45) + ') scale(1,-1)' : ' rotate(' + f(d.side * 45) + ')') + '"/>');
       } else {
-        o.push('<circle cx="' + f(d.x - d.r * 1.5) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
+        // 三个点：圆心间距 2.4r（2026-09-27 用户定，原 1.5r 挤成一团）
+        o.push('<circle cx="' + f(d.x - d.r * 2.4) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
         o.push('<circle cx="' + f(d.x) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
-        o.push('<circle cx="' + f(d.x + d.r * 1.5) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
+        o.push('<circle cx="' + f(d.x + d.r * 2.4) + '" cy="' + f(d.y) + '" r="' + f(d.r) + '" fill="' + t.canvas_color + '"/>');
       }
     }
 
