@@ -1,10 +1,6 @@
 package services
 
-import (
-	"fmt"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
-)
+import "fmt"
 
 /* PrintService：矢量打印通道（与位图导出并列的第二种输出方式）。
  *
@@ -14,36 +10,15 @@ import (
  *
  * 分工：前端在 PublishExport.vue 维护常驻 #print-root（teleport 到 body，
  * 屏显 display:none，@media print 才显示，内含逐叶 SVG 与固定毫米尺寸）；
- * 本服务只负责触发打印。用户在系统打印对话框里选「存储为 PDF」即得矢量 PDF。
+ * 本服务把 #print-root 静默打印成 PDF 文件。
  *
- * 后续（未做）：静默出文件的定制打印桥——Wails 内置 Print() 弹对话框，
- * 且 beta.25 的 windowPrint 用 sharedPrintInfo（横向、30 边距），要精确控制
- * 纸张尺寸需自己写 printOperationWithPrintInfo + NSPrintSaveJob。
- * 注意 wails 源码注释的坑：WKWebView 下 [printOperation runOperation] 无效，
- * 必须走 runOperationModalForWindow。 */
+ * 注意：没有「打印对话框」通道——wails 内置 win.Print() 用 sharedPrintInfo
+ * （横向 + 30pt 边距），前端 @page margin:0 压不住，每叶后必溢出一页空白
+ * （2026-09-27 实测 68 页里 34 页全空），不可修，勿再加回。 */
 
-// PrintService 提供窗口打印能力（跨平台方法；macOS 走 WKWebView printOperation，
-// Windows 走 WebView2 ShowPrintUI，由 wails 各自实现）。
+// PrintService 提供矢量 PDF 导出能力（macOS 走 WKWebView printOperation，
+// Windows 走 WebView2 PrintToPdfStream，见 print_darwin.go / print_windows.go）。
 type PrintService struct{}
-
-// Print 对当前主窗口发起打印：弹出系统打印对话框。
-// 前端需保证 #print-root（打印专用 DOM）已就绪——打印时 WebKit 应用
-// @media print 样式，应用 UI 被隐藏、仅打印容器参与分页。
-func (s *PrintService) Print() error {
-	app := application.Get()
-	if app == nil {
-		return fmt.Errorf("应用未初始化")
-	}
-	win := app.Window.Current()
-	if win == nil {
-		return fmt.Errorf("未找到可打印窗口")
-	}
-	ww, ok := win.(*application.WebviewWindow)
-	if !ok || ww == nil {
-		return fmt.Errorf("当前窗口不支持打印")
-	}
-	return ww.Print()
-}
 
 // ExportPDF 静默矢量导出：不经对话框，直接把 #print-root 打印成 PDF 落到 path。
 // wMM/hMM = 叶子物理尺寸（毫米）；纸张按此设置、边距 0、不缩放，每叶恰好一页。

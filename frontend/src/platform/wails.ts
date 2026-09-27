@@ -188,15 +188,6 @@ export async function openFolder(path: string): Promise<void> {
   return (ProjectSvc as any).OpenFolder(path)
 }
 
-/* ---- 矢量打印（第二输出通道） ----
- * 对主窗口发起系统打印。WebKit 以 print media 重新布局：应用 UI 隐藏，
- * 仅 #print-root（逐叶 SVG，teleport 到 body）参与分页——document 上下文里
- * 系统字体直接解析（零内联），输出为矢量（文字可选中可搜索）。
- * 用户在打印对话框中选「存储为 PDF」即得矢量 PDF。 */
-export async function printWindow(): Promise<void> {
-  return (PrintSvc as any).Print()
-}
-
 /* 静默矢量 PDF 导出：Go 侧打印桥（WKWebView printOperation + NSPrintSaveJob）
  * 直接把 #print-root 打印成 PDF 落到 path，无对话框。纸张 = 叶子物理尺寸（毫米），
  * 边距 0、不缩放、每叶恰好一页；字体由 WebKit 解析系统字体（零内联），输出矢量文字。 */

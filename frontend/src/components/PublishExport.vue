@@ -315,18 +315,12 @@ async function openOutput() {
 /* ============ 矢量打印（第二输出通道，与位图导出并存） ============
  * 预览的逐叶 SVG（spreads）在 document 上下文渲染，系统字体直接可解析；
  * 打印走 WebKit 打印管线，同一批 SVG 以 print media 参与分页——字体零内联、
- * 输出矢量 PDF（文字可选中可搜索）。打印内容与右侧预览严格同源。 */
-const printing = ref(false)
+ * 输出矢量 PDF。打印内容与右侧预览严格同源。
+ * 仅有静默导出一途：系统打印对话框（wails win.Print）走共享打印信息，
+ * 自带边距压不下逐叶尺寸，每叶后必溢出一页空白（2026-09-27 实测），不可修，勿再加回。 */
 /* 300dpi 像素 → 物理毫米（1px = 25.4/300 mm），打印 1:1 不缩放 */
 function mm(v: number): string { return ((v / 300) * 25.4).toFixed(2) + 'mm' }
 function mmNum(v: number): number { return (v / 300) * 25.4 }
-async function printBook() {
-  if (!spreads.value.length) { toast('请先渲染预览：打印内容与右侧预览同源'); return }
-  printing.value = true
-  try { await plat.printWindow() }
-  catch (e: any) { toast('打印失败：' + (e?.message || e)) }
-  printing.value = false
-}
 
 /* 矢量 PDF 静默导出：Go 打印桥直出文件（无对话框），与位图导出同一落盘位置与弹窗交互。
  * WebKit 一次性打印整书（主线程数秒），无逐叶进度；叶子尺寸全书一致，取首叶换算毫米。 */
@@ -418,9 +412,6 @@ async function exportPNG() {
         title="静默矢量导出：不经打印对话框，直接生成矢量 PDF 到 output/。字体由系统直接解析（预览用什么字体就是什么字体），文字为矢量字形、任意缩放清晰。生成期间界面会短暂无响应（WebKit 整书打印，数秒）。"
         @click="exportVectorPDF">导出 PDF 矢量（{{ expCount }} 叶）</button>
       <button class="act sub" :disabled="exporting" @click="exportPNG">导出 PNG（逐叶）</button>
-      <button class="act sub" :disabled="printing || rendering || !spreads.length"
-        title="走系统打印对话框（可改纸张/打印机）：字体由系统直接解析，输出矢量。"
-        @click="printBook">打印…（对话框）</button>
       <button class="act sub" @click="openOutput">打开导出目录</button>
       <div class="note">
         选中左侧某项后异步渲染预览，导出按钮<span class="hl">仅对该成品生效</span>。<br>
