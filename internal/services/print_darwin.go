@@ -16,7 +16,9 @@ package services
 @end
 
 // 主线程执行：静默打印出 PDF。纸张 = 叶子物理尺寸（mm→pt），边距 0，
-// pagination clip（不缩放不重排，每叶恰好一页），jobDisposition = NSPrintSaveJob
+// pagination clip（不缩放不重排）；「每叶恰好一页」还需前端把叶盒削矮 --leaf-shave，
+// 否则 WebKit 有效页盒比纸幅小约 0.63pt、每叶后多一张白页（见 frontend/src/App.vue）。
+// jobDisposition = NSPrintSaveJob
 // 直接落文件，全程无对话框。注意 [printOperation runOperation] 在 WKWebView 下
 // 无效（wails 源码同款注释），必须 runOperationModalForWindow 走 modal session。
 static char *exportPDFMain(WKWebView *wv, const char *path, double wMM, double hMM) {
@@ -45,7 +47,12 @@ static char *exportPDFMain(WKWebView *wv, const char *path, double wMM, double h
 	NSPrintOperation *op = [wv printOperationWithPrintInfo:pinfo];
 	op.showsPrintPanel = NO;
 	op.showsProgressPanel = NO;
-	op.view.frame = wv.bounds;
+	// 打印视图 frame 设成纸张尺寸（点）= Apple 官方样例写法：视图按纸宽排版，内容才 1:1 落在纸上；
+	// 不能沿用 wv.bounds（窗口屏显尺寸，远大于纸张）。**但它不是白页的成因**——白页来自叶盒贴着
+	// 纸幅就溢出 WebKit 的有效页盒（比 pinfo.paperSize 小约 0.63pt），修在前端 .print-leaf 的
+	// --leaf-shave（见 frontend/src/App.vue）；改 frame 对白页实测无任何影响。
+	// 纸张尺寸已按横/纵归一写入 pinfo.paperSize（横排时宽高已对调），直接取用即可。
+	op.view.frame = NSMakeRect(0, 0, pinfo.paperSize.width, pinfo.paperSize.height);
 	[op runOperationModalForWindow:wv.window delegate:nil didRunSelector:NULL contextInfo:NULL];
 	return NULL;
 }

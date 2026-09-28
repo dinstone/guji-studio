@@ -165,6 +165,10 @@ let gotoSourceCb: ((i: number) => void) | null = null
 export function onGotoSource(cb: (i: number) => void) { gotoSourceCb = cb }
 export function gotoSource(i: number) { if (gotoSourceCb) gotoSourceCb(i) }
 export const linkOn = ref(true)
+/** 半叶一张纸：排版仍按整叶（右半叶+左半叶）排，导出/预览时把**每一叶**（含封面/扉页/尾页等特殊页）
+ *  一律物理切成右半叶、左半叶各一张纸 —— 统一规则，全本纸幅一致（特殊页左半为素纸也照常输出）。
+ *  预览与导出共用此开关。 */
+export const halfLeafMode = ref(false)
 export interface PreviewLayoutInfo {
   contentW: number; contentH: number; gutter: number
   cols: number; rows: number; colW: number; rowH: number; cellH: number

@@ -161,15 +161,24 @@ input, select, button { font-family: inherit; }
  * #print-root 由 PublishExport teleport 到 body 直下，屏显隐藏；打印时应用 UI
  * 整体隐藏、仅打印容器参与分页——WebKit 打印管线在 document 上下文渲染这批 SVG，
  * 系统字体直接解析（零内联）、输出矢量文字。@page margin 0 保证逐叶 1:1 无白边。 */
-#print-root { display: none; }
+/* --leaf-shave：叶盒(.print-leaf)相对纸幅削矮的量，唯一目的是避开 WebKit 有效页盒比
+ * printInfo.paperSize 小的那约 0.63pt 缺口——不削则每叶尾部溢出 ε 成第二页，导出恒为
+ * 「内容页 + 白页」（184 页 = 92 叶 × 2，2026-09-28 查实，根因详见 PublishExport.vue 矢量打印段）。
+ * 取值须 > 0.63pt(=0.84px)，取 2px(=1.5pt) 留 0.87pt 余量。 */
+#print-root { display: none; --leaf-shave: 2px; }
 /* svg 缩放必须写在全局块：PublishExport 的 scoped 样式编译成 .print-leaf svg[data-v-x]，
  * 而 v-html 注入的 svg 没有 data-v 属性，规则不命中 → svg 按 width 属性的 300dpi 像素
  * 渲染（毫米容器的 3.125 倍）→ overflow:hidden 裁到只剩一角（2026-09-27 实测翻过车）。 */
-#print-root svg { width: 100%; height: 100%; display: block; }
+/* height 必须把 shave 加回来（= 叶盒高 + shave = 整叶真实物理高）：svg 按真实尺寸排布，
+ * 内容才不被等比缩掉 0.25%；多出的 shave 落在叶盒之外，由 .print-leaf 的 overflow:hidden
+ * 裁掉——那里是底边素纸地脚（本书实测最低墨迹距纸边 15mm），不裁字。 */
+#print-root svg { width: 100%; height: calc(100% + var(--leaf-shave, 2px)); display: block; }
 @media print {
-  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; margin: 0 !important; padding: 0 !important; }
   #app { display: none !important; }
-  #print-root { display: block !important; }
+  #print-root { display: block !important; margin: 0 !important; padding: 0 !important; }
+  /* 每叶毫米尺寸（高度 = mm(H) − --leaf-shave，见上）恰好占一页；box-sizing 防止 padding/border 撑高 */
+  #print-root .print-leaf { margin: 0; padding: 0; box-sizing: border-box; overflow: hidden; }
   @page { margin: 0; }
 }
 </style>

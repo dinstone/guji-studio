@@ -4,7 +4,7 @@ import { LayoutEngine, preloadTexture } from '../core/engine'
 import { prepareTemplateForRender } from '../core/fontcheck'
 import { ensureAssets, onAssetReady } from '../core/assets'
 import { fontLabelOf } from '../core/fontlist'
-import { resolveTplBlock, curUnit, curChapter, cur, view, proj, unitFlowText, volLabelOf, isTocUnit, isTocDerived, tocUnit, tplEdit, tplScope, setPreviewLayout, projectDir, toast, editorSel, gotoSource, linkOn } from '../stores/app'
+import { resolveTplBlock, curUnit, curChapter, cur, view, proj, unitFlowText, volLabelOf, isTocUnit, isTocDerived, tocUnit, tplEdit, tplScope, setPreviewLayout, projectDir, toast, editorSel, gotoSource, linkOn, halfLeafMode } from '../stores/app'
 import { rasterizeSvg, saveBlobToOutput, downloadBlob } from '../core/exportImage'
 import { beginFontSession, primeCodepoints } from '../core/fontEmbed'
 
@@ -106,9 +106,21 @@ watch(
   { immediate: true }
 )
 
-const svgs = computed(() =>
-  leaves.value.map(l => E.renderPage(prepareTemplateForRender(l.t), l.p, { guides: view.guides, rulers: view.rulers }))
-)
+const svgs = computed(() => {
+  const base = { guides: view.guides, rulers: view.rulers }
+  const out: string[] = []
+  for (const l of leaves.value) {
+    const t2 = prepareTemplateForRender(l.t)
+    if (halfLeafMode.value) {
+      /* 半叶一张纸：同一整叶渲染两次，分别取右半叶 / 左半叶（引擎按 half 裁切 + 版心定位） */
+      out.push(E.renderPage(t2, l.p, { ...base, half: 0 }))
+      out.push(E.renderPage(t2, l.p, { ...base, half: 1 }))
+    } else {
+      out.push(E.renderPage(t2, l.p, base))
+    }
+  }
+  return out
+})
 /* 版心尺寸参考模板：本卷模式取当前卷，其余取首叶或当前单元 */
 const refTpl = computed(() => {
   if (view.src === 'volume') {
@@ -119,7 +131,9 @@ const refTpl = computed(() => {
 })
 const width = computed(() => {
   const m = E.computeMetrics(refTpl.value)
-  return Math.round(m.W * view.zoom / 100)
+  /* 半叶模式取较宽的一侧（右 = W−centerX、左 = centerX，边距不对称时不等），保证容器够宽不裁内容 */
+  const w = halfLeafMode.value ? Math.max(E.halfLeafBox(m, 0).w, E.halfLeafBox(m, 1).w) : m.W
+  return Math.round(w * view.zoom / 100)
 })
 /* 纸张定位：让「版框」在可视区居中，同时保证版框左缘始终可达。
    margin-left 取「居中位移」与「−纸张自留边」的较大者：
@@ -208,16 +222,25 @@ async function exportPreviewPng() {
     primeCodepoints(unitFlowText(curUnit() as any) +
       '0123456789〇零一二三四五六七八九十百千万、，。：；！？「」『』〔〕…—（）()《》〈〉·')
     const dir = projectDir.value
-    const total = leaves.value.length
+    /* 半叶模式下每整叶拆成右/左两张，逐张导出 */
+    interface Job { t: any; p: any; half?: 0 | 1; n: number }
+    const jobs: Job[] = []
+    leaves.value.forEach((l, i) => {
+      const n = l.p.leaf != null ? l.p.leaf : i + 1
+      if (halfLeafMode.value) { jobs.push({ t: l.t, p: l.p, half: 0, n }); jobs.push({ t: l.t, p: l.p, half: 1, n }) }
+      else jobs.push({ t: l.t, p: l.p, n })
+    })
+    const total = jobs.length
     let od = ''
     for (let i = 0; i < total; i++) {
-      const l = leaves.value[i]
-      const t2 = prepareTemplateForRender(l.t)
-      const svg = E.renderPage(t2, l.p, { guides: 0, rulers: 0 })
-      const m = E.computeMetrics(l.t) as any
-      const blob = await rasterizeSvg(svg, m.W, m.H, String(l.p.leaf ?? i + 1))
-      const n = l.p.leaf != null ? l.p.leaf : i + 1
-      const name = `预览-${pad3(n)}.png`
+      const j = jobs[i]
+      const t2 = prepareTemplateForRender(j.t)
+      const svg = E.renderPage(t2, j.p, { guides: 0, rulers: 0, half: j.half })
+      const m = E.computeMetrics(j.t) as any
+      /* 半叶图幅 = 该半叶纸盒宽（中缝→纸边），否则会把整叶宽当成半叶宽、位置与留白全错 */
+      const bw = j.half !== undefined ? E.halfLeafBox(m, j.half).w : m.W
+      const blob = await rasterizeSvg(svg, bw, m.H, String(j.n) + (j.half !== undefined ? (j.half === 0 ? ' 右' : ' 左') : ''))
+      const name = `预览-${pad3(j.n)}${j.half !== undefined ? (j.half === 0 ? '-R' : '-L') : ''}.png`
       if (dir) od = await saveBlobToOutput(dir, name, blob)
       else await downloadBlob(blob, name)
     }
@@ -397,6 +420,7 @@ onMounted(() => { leaves.value = computeLeaves(); fit(); window.addEventListener
       </div>
       <label class="ck"><input v-model="view.guides" type="checkbox" :true-value="1" :false-value="0">辅助线</label>
       <label class="ck"><input v-model="view.rulers" type="checkbox" :true-value="1" :false-value="0">尺寸标尺</label>
+      <label class="ck"><input v-model="halfLeafMode" type="checkbox">半叶一张纸</label>
       <span class="sp" />
       <button class="fit" @click="fit">适宽</button>
       <div class="zgrp">

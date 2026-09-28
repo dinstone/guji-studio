@@ -5,6 +5,7 @@ import { prepareTemplateForRender } from '../core/fontcheck'
 import {
   proj, addPub, deletePub, availablePackLeaves,
   resolveTplBlock, toast, resolveLeafCfg, tpl, unitFlowText, volLabelOf, projectDir,
+  halfLeafMode,
   type PubGroup, type PubChapters, type Block, type Volume,
 } from '../stores/app'
 import { appConfirm } from '../stores/dialog'
@@ -109,8 +110,22 @@ function bookUnits(): (Block | Volume)[] { return [...proj.tree.guide, ...proj.t
 
 /* 叶计划：只分页（快速），特殊页直接成图，正文页留待渲染阶段逐叶成图。
  * 预览与导出共用同一份计划，保证所见即所得、且分页只做一次。target=-1 整书合并，>=0 某分册。 */
-interface PlanLeaf { label: string; W: number; H: number; svg?: string; tpl?: any; page?: any }
+interface PlanLeaf { label: string; W: number; H: number; half?: 0 | 1; svg?: string; tpl?: any; page?: any }
 const arrOf = (v: string | string[] | undefined): string[] => v == null ? [] : Array.isArray(v) ? v : [v]
+
+/* 把整叶 SVG 物理裁切成某个半叶：仅改写根 <svg> 的 viewBox/width/height 到 [hb.x, hb.x+hb.w] 区域，
+ * 内容坐标一个字都不挪（与 engine.renderPage 对正文的半叶裁切同源：按中缝向纸边取满）。
+ * 半叶模式下所有一叶（含特殊页）都按此法切成右、左两张半叶输出，全本纸幅统一为半叶宽；
+ * 矢量通道单一纸幅因此天然成立，位图通道也逐叶同尺寸。 */
+function cropSvgHalf(svg: string, hb: { x: number; w: number }, H: number): string {
+  return svg.replace(/<svg([^>]*)>/, (_m: string, attrs: string) => {
+    const a = attrs
+      .replace(/viewBox="[^"]*"/, `viewBox="${hb.x} 0 ${hb.w} ${H}"`)
+      .replace(/width="[^"]*"/, `width="${hb.w}"`)
+      .replace(/height="[^"]*"/, `height="${H}"`)
+    return `<svg${a}>`
+  })
+}
 
 function planSpreads(target: number): PlanLeaf[] {
   const out: PlanLeaf[] = []
@@ -119,15 +134,33 @@ function planSpreads(target: number): PlanLeaf[] {
   const pushSpecial = (nm: string, k: 'cover' | 'fly' | 'colophon', volLabel?: string) => {
     const cfg = resolveLeafCfg(k)
     if (volLabel) cfg.volLabel = volLabel
-    out.push({ label: nm, W: m.W, H: m.H, svg: renderSpread(null, k, cfg, m.W, m.H) })
+    const svg = renderSpread(null, k, cfg, m.W, m.H)
+    if (halfLeafMode.value) {
+      /* 半叶模式：所有一叶都物理切成右、左两张半叶输出（先右后左，与正文半叶一致），
+       * 不管特殊页左半有无内容——左半按中缝裁出来是素纸衬页也照常输出。
+       * 这样全本纸幅统一为半叶宽，矢量通道单一纸幅天然成立；位图通道亦逐叶同尺寸。 */
+      const hbR = E.halfLeafBox(m, 0), hbL = E.halfLeafBox(m, 1)
+      out.push({ label: `${nm} 右`, W: hbR.w, H: m.H, half: 0, svg: cropSvgHalf(svg, hbR, m.H) })
+      out.push({ label: `${nm} 左`, W: hbL.w, H: m.H, half: 1, svg: cropSvgHalf(svg, hbL, m.H) })
+    } else {
+      out.push({ label: nm, W: m.W, H: m.H, svg })
+    }
   }
   const pushText = (tplUnit: any, flowText: string, baseName: string, volName: string) => {
     if (!flowText) return
     const t = prepareTemplateForRender(resolveTplBlock(tplUnit))
     const mm = E.computeMetrics(t)
+    /* 半叶纸盒：以中缝为分割线向纸边取满（右 = W−centerX、左 = centerX），尺寸唯一真源 = 引擎 halfLeafBox */
+    const hbR = E.halfLeafBox(mm, 0), hbL = E.halfLeafBox(mm, 1)
     for (const p of E.paginate(t, flowText).pages as any[]) {
       p.leaf = ++no.n; p.volName = volName
-      out.push({ label: `${baseName} ${no.n}`, W: mm.W, H: mm.H, tpl: t, page: p })
+      if (halfLeafMode.value) {
+        /* 半叶一张纸：先右半叶、后左半叶（与古籍装订序一致），各一张纸；版心由引擎按 half 定位。 */
+        out.push({ label: `${baseName} ${no.n} 右`, W: hbR.w, H: mm.H, half: 0, tpl: t, page: p })
+        out.push({ label: `${baseName} ${no.n} 左`, W: hbL.w, H: mm.H, half: 1, tpl: t, page: p })
+      } else {
+        out.push({ label: `${baseName} ${no.n}`, W: mm.W, H: mm.H, tpl: t, page: p })
+      }
     }
   }
   if (target < 0) {
@@ -158,7 +191,7 @@ function planSpreads(target: number): PlanLeaf[] {
 }
 
 function renderLeaf(leaf: PlanLeaf): string {
-  return leaf.svg ?? E.renderPage(leaf.tpl!, leaf.page!, { guides: 0 })
+  return leaf.svg ?? E.renderPage(leaf.tpl!, leaf.page!, { guides: 0, half: leaf.half })
 }
 
 /* 当前选择的叶数（仅分页，不渲染 SVG）：列表与导出按钮共读。sel===null 时为 0（未选，导出禁用）。 */
@@ -174,10 +207,10 @@ const renderProgress = ref({ cur: 0, total: 0 })
 let renderToken = 0
 const renderCache = new Map<string, Spread[]>()
 /* 缓存键：整书合并用 'book'，分册用其稳定 id（不用下标，避免删册后下标错位命中旧项）；
- * 含 includeSpecial 使「含/不含特殊页」两版互不污染。 */
+ * 含 includeSpecial 使「含/不含特殊页」两版互不污染；含 halfLeafMode 使整叶/半叶两版互不污染。 */
 function cacheKey(target: number): string {
   const id = target < 0 ? 'book' : (proj.pubs[target]?.id ?? `pub:${target}`)
-  return `${id}:${includeSpecial.value ? 1 : 0}`
+  return `${id}:${includeSpecial.value ? 1 : 0}:${halfLeafMode.value ? 'h' : 'f'}`
 }
 const nextFrame = () => new Promise<void>(r => requestAnimationFrame(() => r()))
 async function selectAndRender(target: number, force = false) {
@@ -212,7 +245,16 @@ async function selectAndRender(target: number, force = false) {
 watch(includeSpecial, () => {
   if (sel.value !== null) {
     const id = sel.value < 0 ? 'book' : (proj.pubs[sel.value]?.id ?? `pub:${sel.value}`)
-    renderCache.delete(`${id}:0`); renderCache.delete(`${id}:1`)
+    renderCache.delete(`${id}:0:0`); renderCache.delete(`${id}:1:0`)
+    renderCache.delete(`${id}:0:1`); renderCache.delete(`${id}:1:1`)
+    selectAndRender(sel.value, true)
+  }
+})
+/* 切换半叶一张纸时，清除当前项所有缓存变体后强制重渲 */
+watch(halfLeafMode, () => {
+  if (sel.value !== null) {
+    const id = sel.value < 0 ? 'book' : (proj.pubs[sel.value]?.id ?? `pub:${sel.value}`)
+    for (const s of ['0', '1']) for (const h of ['f', 'h']) renderCache.delete(`${id}:${s}:${h}`)
     selectAndRender(sel.value, true)
   }
 })
@@ -316,8 +358,12 @@ async function openOutput() {
  * 预览的逐叶 SVG（spreads）在 document 上下文渲染，系统字体直接可解析；
  * 打印走 WebKit 打印管线，同一批 SVG 以 print media 参与分页——字体零内联、
  * 输出矢量 PDF。打印内容与右侧预览严格同源。
- * 仅有静默导出一途：系统打印对话框（wails win.Print）走共享打印信息，
- * 自带边距压不下逐叶尺寸，每叶后必溢出一页空白（2026-09-27 实测），不可修，勿再加回。 */
+ * 仅有静默导出一途：系统打印对话框（wails win.Print）走共享打印信息、自带边距压不下逐叶尺寸，勿再加回。
+ * 【白页根因 · 2026-09-28 查实】WebKit 的有效页盒比 printInfo.paperSize 小约 0.63pt（钉死证据：184 页 = 92 叶 × 2，
+ * 每叶后一张只含 0.63pt 白底的碎片页）。叶盒一旦贴着纸幅就必然溢出 ε 成第二页，再被 .print-leaf 的
+ * page-break-after 顶到下一页 → 恒为「内容页 + 白页」。修法：叶盒高度减 --leaf-shave（见 App.vue），
+ * 同时把 #print-root svg 用 calc(100% + shave) 撑回物理尺寸 → 内容不缩放、不裁字，只多切掉底边素纸地脚。
+ * 判据：导出 PDF 的页数 == plan.length（tools/probe-pdf-pages.py 汇总行的 pages / blank pages total）。 */
 /* 300dpi 像素 → 物理毫米（1px = 25.4/300 mm），打印 1:1 不缩放 */
 function mm(v: number): string { return ((v / 300) * 25.4).toFixed(2) + 'mm' }
 function mmNum(v: number): number { return (v / 300) * 25.4 }
@@ -405,6 +451,7 @@ async function exportPNG() {
 
       <div class="grp">拼装选项</div>
       <label class="ck"><input v-model="includeSpecial" type="checkbox"> 包含特殊页（封面/扉页/尾页）</label>
+      <label class="ck"><input v-model="halfLeafMode" type="checkbox"> 半叶一张纸（每正文叶拆右/左半叶各一张，特殊页不拆）</label>
 
       <div class="grp">输出</div>
       <button class="act" :disabled="exporting || !expCount" @click="exportPDF">导出 PDF 位图（{{ expCount }} 叶）</button>
@@ -523,7 +570,7 @@ async function exportPNG() {
     <Teleport to="body">
       <div id="print-root" aria-hidden="true">
         <div v-for="(s, i) in spreads" :key="i" class="print-leaf"
-          :style="{ width: mm(s.W), height: mm(s.H) }" v-html="s.svg"></div>
+          :style="{ width: mm(s.W), height: `calc(${mm(s.H)} - var(--leaf-shave, 2px))` }" v-html="s.svg"></div>
       </div>
     </Teleport>
   </div>

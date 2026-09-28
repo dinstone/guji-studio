@@ -1833,9 +1833,16 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
    * @param {object} page paginate 产出的页对象
    * @param {object} opts { guides:0|1, rulers:0|1 }
    */
+  /* 半叶纸盒（单一真源）：以「叶的中心线 = 中缝 m.centerX」为分割线，向本半叶的纸边展开 ——
+     右半叶 = [centerX, W]（宽 W − centerX）；左半叶 = [0, centerX]（宽 centerX），高不变。
+     renderPage 的 opts.half 与预览/导出的尺寸计算共用此函数，严禁各处各算一套。 */
+  function halfLeafBox(m, half) {
+    return half === 0 ? { x: m.centerX, w: m.W - m.centerX } : { x: 0, w: m.centerX };
+  }
   function renderPage(t, page, opts) {
     opts = opts || {};
     var m = computeMetrics(t);
+    var halfW = (m.content.w - m.centerW) / 2;   // 半叶宽（版心两侧各一）
     var o = [], i;
     // 书名/卷次/页码纵向自动定位：随内容区比例落位（换纸张高度时不错位）
     var pagerY = t.pager_y_auto ? (m.content.y0 + m.content.h * 0.70) : num(t.pager_y, 0);   // 默认在卷次(0.62)下方
@@ -1846,7 +1853,21 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     var fontTitle = t.title_font_family ? familyStack(t.title_font_family) : fontT;
     var fontPager = t.pager_font_family ? familyStack(t.pager_font_family) : fontT;
 
-    o.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + f(m.W) + ' ' + f(m.H) + '" width="' + f(m.W) + '" height="' + f(m.H) + '">');
+    /* 半叶模式 = **纯物理裁切**：整叶照常绘制（所有坐标都用整叶绝对坐标，一个字都不挪），
+     * 只把 viewBox 切到本半叶并向该侧纸边取满 —— 右半叶 [centerX, W]、左半叶 [0, centerX]，
+     * 分割线就是叶的中心线（中缝 m.centerX）。切在纸外的东西自然看不见；压在切线上的
+     * 版心文字（书名/卷次）与堂号印各见一半，跟把纸沿中缝撕开完全一样。
+     * 唯一例外：页码在 half 模式下强制走 face 分支（一叶两码，见下方），否则单码居中于
+     * 中线会被劈成半个字。
+     * 纸宽由 halfLeafBox 统一给出（与预览/导出一致），高不变。 */
+    var svgW = m.W, svgH = m.H, vbX = 0;
+    if (opts.half !== undefined) {
+      var hb = halfLeafBox(m, opts.half);
+      svgW = hb.w;
+      svgH = m.H;
+      vbX = hb.x;
+    }
+    o.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + f(vbX) + ' 0 ' + f(svgW) + ' ' + f(svgH) + '" width="' + f(svgW) + '" height="' + f(svgH) + '">');
 
     /* 纸张 */
     o.push('<rect x="0" y="0" width="' + f(m.W) + '" height="' + f(m.H) + '" fill="' + t.canvas_color + '"/>');
@@ -1976,6 +1997,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
       else if (_al === false || _al === 0) _al = 'left';
       else if (_al !== 'left' && _al !== 'right' && _al !== 'center') _al = 'center';
       var tfs0 = num(t.title_font_size, 60);
+      /* 版心文字横向落位一律按整叶坐标算，半叶模式**不参与**（物理裁切后该露多少露多少） */
       var tx = _al === 'center' ? m.centerX
         : _al === 'right' ? (m.centerX + halfC - tfs0 * 0.62)
         : (m.centerX - halfC + tfs0 * 0.62);
@@ -1989,8 +2011,12 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
             '" fill="' + (seamFill(pfs) || t.pager_color) + '" font-family="' + esc(fontPager) + '"' +
             ' text-anchor="middle" dominant-baseline="central">' + esc(pv[j]) + '</text>');
       }
-      if (String(t.pager_mode) === 'face') {
-        var pfmt = function (n) { return t.pager_style === 'arabic' ? String(n) : cn(n); };
+      var pfmt = function (n) { return t.pager_style === 'arabic' ? String(n) : cn(n); };
+      if (String(t.pager_mode) === 'face' || opts.half !== undefined) {
+        /* face = 一叶两码：右码贴版界右缘、左码贴版界左缘。
+           半叶模式强制走这条分支（联动 face）：编号本就分左右（右 2n−1 / 左 2n），
+           码的落位也在各自半带内 —— 物理裁切后每个半叶自然只剩自己那一码；
+           若走 center 单码，码居中于中线会被劈成半个字。 */
         pagerRun(m.centerX + halfC - pfs * 0.62, pfmt(2 * page.leaf - 1));
         pagerRun(m.centerX - halfC + pfs * 0.62, pfmt(2 * page.leaf));
       } else {
@@ -2027,6 +2053,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     /* 版心堂号：中缝上的图片素材，压在鱼尾与版心文字之上（印章是最后盖上去的）。
        横向恒居中于中缝（m.centerX），纵向只由 seam_stamp_pos（内容区高度比例）决定。 */
     if (t.seam_stamp_src && m.centerW > 0) {
+      /* 堂号印跨中缝：半叶模式同样不动它，物理劈开后左右各见一半（与真实折页一致） */
       var ssBox = assetBox(
         t.seam_stamp_src,
         m.centerX,
@@ -2108,6 +2135,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     paginate: paginate,
     fishGeom: fishGeom,
     renderPage: renderPage,
+    halfLeafBox: halfLeafBox,
     /* 注入图片素材解析器（core/assets.ts 的 assetInfo）——engine 不 import 具体实现 */
     setAssetResolver: setAssetResolver,
     cn: cn
