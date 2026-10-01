@@ -1897,18 +1897,32 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
         '" fill="none" stroke="' + t.outline_color + '" stroke-width="' + f(num(t.outline_width, 0)) + '"/>');
     if (num(t.inline_width, 0) > 0) {
       if (m.centerW > 0) {
-        /* 内框线不穿过版界/中缝（与辅助线同口径：上下边在版界两侧分段，左右边贯通） */
+        /* 内框 = 左右两个完整矩形，各自围住内容区：左 [x0,ilb]、右 [irb,x1]。
+           四条边全画（含版心侧 ilb/irb 竖边），纵向贯通内容区(ct.y0..ct.y1)，用 inline 样式。
+           这是「内边框」——独立于版心界线，可单独演化（唯一联系是 x 位置可能相同）。
+
+           **必须用闭合图元 <rect>，不能用多条 M/H/V 子路径拼**：分段各自是 butt 线帽，端点精确
+           停在拐角坐标，拐角处 (w/2 × w/2) 的方块无人填 → 视觉上「少一角/有台阶」（2026-10-01 用户
+           反馈：“内边框的连接处为啥不能跟外边框一样无缝”）。rect 是闭合子路径，拐角走 miter 接合，
+           与外框呈现完全一致的无缝直角。改协议前先看 probe-inline-frame.mjs 的闭合性断言。 */
         var ilb = m.centerX - m.centerW / 2, irb = m.centerX + m.centerW / 2;
-        o.push('<path class="v-inline" fill="none" stroke="' + t.inline_color + '" stroke-width="' + f(num(t.inline_width, 0)) + '" d="' +
-          'M' + f(ct.x0) + ' ' + f(ct.y0) + 'H' + f(ilb) +
-          'M' + f(irb) + ' ' + f(ct.y0) + 'H' + f(ct.x1) +
-          'M' + f(ct.x0) + ' ' + f(ct.y1) + 'H' + f(ilb) +
-          'M' + f(irb) + ' ' + f(ct.y1) + 'H' + f(ct.x1) +
-          'M' + f(ct.x0) + ' ' + f(ct.y0) + 'V' + f(ct.y1) +
-          'M' + f(ct.x1) + ' ' + f(ct.y0) + 'V' + f(ct.y1) + '"/>');
+        var iw = num(t.inline_width, 0), ic = t.inline_color;
+        var iAttr = '" fill="none" stroke="' + ic + '" stroke-width="' + f(iw) + '"/>';
+        o.push('<rect class="v-inline" x="' + f(ct.x0) + '" y="' + f(ct.y0) + '" width="' + f(ilb - ct.x0) + '" height="' + f(ct.h) + iAttr);
+        o.push('<rect class="v-inline" x="' + f(irb) + '" y="' + f(ct.y0) + '" width="' + f(ct.x1 - irb) + '" height="' + f(ct.h) + iAttr);
       } else
         o.push('<rect x="' + f(ct.x0) + '" y="' + f(ct.y0) + '" width="' + f(ct.w) + '" height="' + f(ct.h) +
           '" fill="none" stroke="' + t.inline_color + '" stroke-width="' + f(num(t.inline_width, 0)) + '"/>');
+    }
+
+    /* 版心界线：独立竖线（与内框不共用），位于版心左右沿 ilb/irb，纵向连到外边框(fr.y..fr.y+fr.h)。
+       用 fish_line 样式单独控制，与内边框可独立演化（唯一联系是 x 位置相同）。 */
+    if (num(t.fish_line_width, 0) > 0) {
+      var cxb = m.centerX - m.centerW / 2, cxb2 = m.centerX + m.centerW / 2;
+      o.push('<line class="v-cl" x1="' + f(cxb) + '" y1="' + f(fr.y) + '" x2="' + f(cxb) + '" y2="' + f(fr.y + fr.h) +
+        '" stroke="' + t.fish_line_color + '" stroke-width="' + f(num(t.fish_line_width, 0)) + '"/>');
+      o.push('<line class="v-cl" x1="' + f(cxb2) + '" y1="' + f(fr.y) + '" x2="' + f(cxb2) + '" y2="' + f(fr.y + fr.h) +
+        '" stroke="' + t.fish_line_color + '" stroke-width="' + f(num(t.fish_line_width, 0)) + '"/>');
     }
 
     /* 界行：列与列之间的竖线，贯通内容区（与边框、中缝重合处不重画） */
@@ -1925,14 +1939,6 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
       o.push(vl.join(''));
     }
 
-    /* 版界竖线（版界两侧）：内缩去掉，紧贴版界边缘 → 两线间距 = 版界宽 */
-    if (m.centerW > 0 && num(t.fish_line_width, 0) > 0) {
-      var lx = m.centerX - m.centerW / 2, rx2 = m.centerX + m.centerW / 2;
-      o.push('<line class="v-cl" x1="' + f(lx) + '" y1="' + f(ct.y0) + '" x2="' + f(lx) + '" y2="' + f(ct.y1) +
-        '" stroke="' + t.fish_line_color + '" stroke-width="' + f(num(t.fish_line_width, 0)) + '"/>');
-      o.push('<line class="v-cl" x1="' + f(rx2) + '" y1="' + f(ct.y0) + '" x2="' + f(rx2) + '" y2="' + f(ct.y1) +
-        '" stroke="' + t.fish_line_color + '" stroke-width="' + f(num(t.fish_line_width, 0)) + '"/>');
-    }
     /* 鱼尾 */
     var g = fishGeom(t, m);
     var halfC = m.centerW / 2;
