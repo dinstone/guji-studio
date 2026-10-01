@@ -443,16 +443,14 @@ function chapterPageIdx(u: Block | Volume): { p: number; half: number }[] {
   for (const s of segs) { offsets.push(acc); acc += s.length + 1 }   // +1 为章间 \n
   return pageIndexOfText(resolveTplBlock(u), segs.join('\n'), offsets)
 }
-/** 由各单元真实分页，计算每章的「全书连续页码」（目录页数 tocPages 计入偏移） */
-function buildTocVolEntries(tocPages: number) {
+/** 由各单元真实分页，计算每章的「正文连续页码」：正文从 1 起，导读/附录不占号
+ *  （故此处 cursor 从 0 起、不再累加导读/序页数，与渲染端的 leaf 计数口径一致；
+ *   目录页码引用会跳过辅文、与物理位置错位，是「完全不占号」方案的固有取舍）。 */
+function buildTocVolEntries() {
   const out: { name: string; chapters: { title: string; page: number }[] }[] = []
   const toc = tocUnit()
   const headingMode = !!(toc && toc.mode === 'heading')
-  let cursor = tocPages
-  for (const g of proj.tree.guide) {
-    if (isTocUnit(g)) continue
-    cursor += LayoutEngine.paginate(resolveTplBlock(g), (g.chapters || []).map(c => c.text).filter(Boolean).join('\n')).pages.length
-  }
+  let cursor = 0
   for (const vol of proj.tree.scrolls) {
     const vtext = (vol.chapters || []).map(c => c.text).filter(Boolean).join('\n')
     /* 页码模式取自本卷生效模板：face = 一叶两码 → 目录页码换算成面码
@@ -491,12 +489,12 @@ function computeTocText(): string {
      标记由引擎在分页时把页码贴到本列末端（目录项独占一列，故视觉上各行页码对齐）。 */
   const ce = String((resolveTplBlock(toc) as any).tag_colend || '')
   let tocPages = 0
-  let txt = buildTocTextWithPages(buildTocVolEntries(tocPages), ce)
+  let txt = buildTocTextWithPages(buildTocVolEntries(), ce)
   for (let iter = 0; iter < 4; iter++) {
     const np = LayoutEngine.paginate(resolveTplBlock(toc), txt).pages.length
     if (np === tocPages) break
     tocPages = np
-    const t2 = buildTocTextWithPages(buildTocVolEntries(tocPages), ce)
+    const t2 = buildTocTextWithPages(buildTocVolEntries(), ce)
     if (t2 === txt) break
     txt = t2
   }

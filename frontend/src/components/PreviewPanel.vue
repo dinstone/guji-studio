@@ -44,22 +44,25 @@ function computeLeaves(): Leaf[] {
     const vl = volLabelOf(vol)   // 版心卷次 = 本卷分组名
     return E.paginate(t, unitFlowText(vol)).pages.map((p: any, i: number) => { p.leaf = i + 1; p.volName = vl; return { t, p } })
   }
-  /* 全书合订：导读 → 卷文 → 附录，依次排版；正文叶连续页码（包装/尾页不编页码，在封面视图预览）。
+  /* 全书合订：导读 → 卷文 → 附录，依次排版；正文叶连续页码、从 1 起，
+     导读/附录不占号也不显码（leaf=0，见 engine.renderPage 的 page.leaf 守卫；包装/尾页在封面视图预览）。
      目录单元为派生，unitFlowText 自动返回由卷文生成的「卷名+章名」文本。 */
-  const blocks: { t: Record<string, any>; txt: string; vl: string }[] = []
-  for (const u of [...proj.tree.guide, ...proj.tree.scrolls, ...proj.tree.appendix]) {
-    const txt = unitFlowText(u)
-    if (txt) blocks.push({ t: resolveTplBlock(u), txt, vl: volLabelOf(u) })
-  }
   const out: Leaf[] = []
   let leaf = 0
-  for (const bl of blocks) {
-    E.paginate(bl.t, bl.txt).pages.forEach((p: any) => {
-      p.leaf = ++leaf            // 连续页码：覆盖 paginate 的册内起算值
-      p.volName = bl.vl          // 版心卷次 = 所在卷分组名
-      out.push({ t: bl.t, p })
+  const pushUnit = (u: any, kind: 'guide' | 'scroll' | 'appendix') => {
+    const txt = unitFlowText(u)
+    if (!txt) return
+    const t = resolveTplBlock(u)
+    const vl = volLabelOf(u)
+    E.paginate(t, txt).pages.forEach((p: any) => {
+      p.leaf = kind === 'scroll' ? ++leaf : 0   // 正文连续编；导读/附录不占号
+      p.volName = vl                            // 版心卷次 = 所在卷分组名
+      out.push({ t, p })
     })
   }
+  for (const u of proj.tree.guide) pushUnit(u, 'guide')
+  for (const u of proj.tree.scrolls) pushUnit(u, 'scroll')
+  for (const u of proj.tree.appendix) pushUnit(u, 'appendix')
   return out
 }
 let renderTimer: any
@@ -226,7 +229,7 @@ async function exportPreviewPng() {
     interface Job { t: any; p: any; half?: 0 | 1; n: number }
     const jobs: Job[] = []
     leaves.value.forEach((l, i) => {
-      const n = l.p.leaf != null ? l.p.leaf : i + 1
+      const n = i + 1   // 文件名按物理叶序（导读/附录不占号，leaf=0，故不取 leaf）
       if (halfLeafMode.value) { jobs.push({ t: l.t, p: l.p, half: 0, n }); jobs.push({ t: l.t, p: l.p, half: 1, n }) }
       else jobs.push({ t: l.t, p: l.p, n })
     })

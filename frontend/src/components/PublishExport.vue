@@ -105,9 +105,6 @@ async function warmAssets(): Promise<void> {
 
 const PACK_LEAF: Record<string, 'cover' | 'fly' | 'colophon'> = { '封面': 'cover', '扉页': 'fly', '尾页': 'colophon' }
 
-/* 整书合并的单元序列：导读 → 卷文 → 附录（预览与计数共用，保证口径一致） */
-function bookUnits(): (Block | Volume)[] { return [...proj.tree.guide, ...proj.tree.scrolls, ...proj.tree.appendix] }
-
 /* 叶计划：只分页（快速），特殊页直接成图，正文页留待渲染阶段逐叶成图。
  * 预览与导出共用同一份计划，保证所见即所得、且分页只做一次。target=-1 整书合并，>=0 某分册。 */
 interface PlanLeaf { label: string; W: number; H: number; half?: 0 | 1; svg?: string; tpl?: any; page?: any }
@@ -130,7 +127,8 @@ function cropSvgHalf(svg: string, hb: { x: number; w: number }, H: number): stri
 function planSpreads(target: number): PlanLeaf[] {
   const out: PlanLeaf[] = []
   const m = bookMetrics()
-  const no = { n: 0 }
+  const no = { n: 0 }      // 正文连续页码（仅正文递增）
+  const phys = { n: 0 }    // 物理叶序（每叶递增，用于导出标签，不区分是否占号）
   const pushSpecial = (nm: string, k: 'cover' | 'fly' | 'colophon', volLabel?: string) => {
     const cfg = resolveLeafCfg(k)
     if (volLabel) cfg.volLabel = volLabel
@@ -146,26 +144,30 @@ function planSpreads(target: number): PlanLeaf[] {
       out.push({ label: nm, W: m.W, H: m.H, svg })
     }
   }
-  const pushText = (tplUnit: any, flowText: string, baseName: string, volName: string) => {
+  const pushText = (tplUnit: any, flowText: string, baseName: string, volName: string, kind: 'guide' | 'scroll' | 'appendix' = 'scroll') => {
     if (!flowText) return
     const t = prepareTemplateForRender(resolveTplBlock(tplUnit))
     const mm = E.computeMetrics(t)
     /* 半叶纸盒：以中缝为分割线向纸边取满（右 = W−centerX、左 = centerX），尺寸唯一真源 = 引擎 halfLeafBox */
     const hbR = E.halfLeafBox(mm, 0), hbL = E.halfLeafBox(mm, 1)
     for (const p of E.paginate(t, flowText).pages as any[]) {
-      p.leaf = ++no.n; p.volName = volName
+      /* 正文连续编页码（从 1 起）；导读/附录 leaf=0 = 不占号、不显码（见 engine.renderPage 守卫） */
+      p.leaf = kind === 'scroll' ? ++no.n : 0; p.volName = volName
+      const pn = ++phys.n   // 物理叶序（导读/附录也占位，标签连续，但不参与页码计数）
       if (halfLeafMode.value) {
         /* 半叶一张纸：先右半叶、后左半叶（与古籍装订序一致），各一张纸；版心由引擎按 half 定位。 */
-        out.push({ label: `${baseName} ${no.n} 右`, W: hbR.w, H: mm.H, half: 0, tpl: t, page: p })
-        out.push({ label: `${baseName} ${no.n} 左`, W: hbL.w, H: mm.H, half: 1, tpl: t, page: p })
+        out.push({ label: `${baseName} ${pn} 右`, W: hbR.w, H: mm.H, half: 0, tpl: t, page: p })
+        out.push({ label: `${baseName} ${pn} 左`, W: hbL.w, H: mm.H, half: 1, tpl: t, page: p })
       } else {
-        out.push({ label: `${baseName} ${no.n}`, W: mm.W, H: mm.H, tpl: t, page: p })
+        out.push({ label: `${baseName} ${pn}`, W: mm.W, H: mm.H, tpl: t, page: p })
       }
     }
   }
   if (target < 0) {
     if (includeSpecial.value) { pushSpecial('封面', 'cover'); pushSpecial('扉页', 'fly') }
-    for (const u of bookUnits()) pushText(u, unitFlowText(u), u.name, volLabelOf(u))
+    for (const u of proj.tree.guide) pushText(u, unitFlowText(u), u.name, volLabelOf(u), 'guide')
+    for (const u of proj.tree.scrolls) pushText(u, unitFlowText(u), u.name, volLabelOf(u), 'scroll')
+    for (const u of proj.tree.appendix) pushText(u, unitFlowText(u), u.name, volLabelOf(u), 'appendix')
     if (includeSpecial.value) pushSpecial('尾页', 'colophon')
   } else {
     const p = proj.pubs[target]; if (!p) return out
@@ -175,15 +177,15 @@ function planSpreads(target: number): PlanLeaf[] {
         const k = PACK_LEAF[nm]; if (!k) continue
         pushSpecial(nm, k, k !== 'colophon' ? p.title : undefined)
       }
-      for (const nm of arrOf(g.guide)) { const u = proj.tree.guide.find(x => x.name === nm); if (u) pushText(u, unitFlowText(u), nm, '') }
-      for (const nm of arrOf(g.appendix)) { const u = proj.tree.appendix.find(x => x.name === nm); if (u) pushText(u, unitFlowText(u), nm, '') }
+      for (const nm of arrOf(g.guide)) { const u = proj.tree.guide.find(x => x.name === nm); if (u) pushText(u, unitFlowText(u), nm, '', 'guide') }
+      for (const nm of arrOf(g.appendix)) { const u = proj.tree.appendix.find(x => x.name === nm); if (u) pushText(u, unitFlowText(u), nm, '', 'appendix') }
     }
     for (const g of p.front || []) pushGroup(g)
     for (const s of p.chapters || []) {
       const vol = proj.tree.scrolls.find(v => v.id === s.volume); if (!vol) continue
       const chaps = s.chapters?.length ? vol.chapters.filter(c => s.chapters!.includes(c.id)) : vol.chapters
       const txt = chaps.map(c => c.text).filter(Boolean).join('\n')
-      pushText(vol, txt, vol.name || '正文', vol.name || '')
+      pushText(vol, txt, vol.name || '正文', vol.name || '', 'scroll')
     }
     for (const g of p.back || []) pushGroup(g)
   }
@@ -462,7 +464,7 @@ async function exportPNG() {
       <button class="act sub" @click="openOutput">打开导出目录</button>
       <div class="note">
         选中左侧某项后异步渲染预览，导出按钮<span class="hl">仅对该成品生效</span>。<br>
-        <b>整书合并</b>：一份 PDF = 封面·扉页 + 导读·卷文·附录正文（连续页码）+ 尾页。<br>
+        <b>整书合并</b>：一份 PDF = 封面·扉页 + 导读·卷文·附录正文（正文连续页码、从 1 起；导读/附录不编页码）+ 尾页。<br>
         <b>分册</b>：按该册 front/chapters/back 三段组装（册内页码从 1 重排），文件名 <b>册名-时间.pdf</b>。<br>
         选中后<span class="hl">逐叶异步渲染</span>（数十叶成图较慢，带进度），渲染中可继续操作；导出不依赖预览。<br>
         桌面端 PDF/PNG 落到项目 <b>output/</b> 目录。

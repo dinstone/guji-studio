@@ -2018,15 +2018,19 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
             ' text-anchor="middle" dominant-baseline="central">' + esc(pv[j]) + '</text>');
       }
       var pfmt = function (n) { return t.pager_style === 'arabic' ? String(n) : cn(n); };
-      if (String(t.pager_mode) === 'face' || opts.half !== undefined) {
-        /* face = 一叶两码：右码贴版界右缘、左码贴版界左缘。
-           半叶模式强制走这条分支（联动 face）：编号本就分左右（右 2n−1 / 左 2n），
-           码的落位也在各自半带内 —— 物理裁切后每个半叶自然只剩自己那一码；
-           若走 center 单码，码居中于中线会被劈成半个字。 */
-        pagerRun(m.centerX + halfC - pfs * 0.62, pfmt(2 * page.leaf - 1));
-        pagerRun(m.centerX - halfC + pfs * 0.62, pfmt(2 * page.leaf));
-      } else {
-        pagerRun(tx, t.pager_style === 'arabic' ? String(page.leaf) : cn(page.leaf));
+      /* 叶码仅在 leaf>0 时绘制：导读/附录单元 leaf=0（不占号），版心不画叶码，
+         但书名/卷次仍照常（见上方整块 if(page)）；正文 leaf>=1 正常连续编。 */
+      if (page.leaf) {
+        if (String(t.pager_mode) === 'face' || opts.half !== undefined) {
+          /* face = 一叶两码：右码贴版界右缘、左码贴版界左缘。
+             半叶模式强制走这条分支（联动 face）：编号本就分左右（右 2n−1 / 左 2n），
+             码的落位也在各自半带内 —— 物理裁切后每个半叶自然只剩自己那一码；
+             若走 center 单码，码居中于中线会被劈成半个字。 */
+          pagerRun(m.centerX + halfC - pfs * 0.62, pfmt(2 * page.leaf - 1));
+          pagerRun(m.centerX - halfC + pfs * 0.62, pfmt(2 * page.leaf));
+        } else {
+          pagerRun(tx, t.pager_style === 'arabic' ? String(page.leaf) : cn(page.leaf));
+        }
       }
 
       var tfs = num(t.title_font_size, 60), tyd = Math.max(0.6, num(t.title_ydis, 1.05));
