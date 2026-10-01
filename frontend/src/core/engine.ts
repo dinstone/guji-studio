@@ -2103,8 +2103,8 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
       dim(m.W / 2, 0, m.W / 2, fr.y, '上 ' + Math.round(mt(t)), m.W / 2 + 150, fr.y / 2);
       // 左页边距
       dim(0, m.H / 2, fr.x, m.H / 2, 'L' + Math.round(ml(t)), fr.x / 2, m.H / 2 - 60);
-      // 版界宽
-      dim(m.centerX - m.centerW / 2, ct.y0 - 70, m.centerX + m.centerW / 2, ct.y0 - 70, '版界 ' + Math.round(m.centerW), m.centerX, ct.y0 - 110);
+      // 版心宽
+      dim(m.centerX - m.centerW / 2, ct.y0 - 70, m.centerX + m.centerW / 2, ct.y0 - 70, '版心 ' + Math.round(m.centerW), m.centerX, ct.y0 - 110);
       // 半叶宽 + 列宽
       var ry = ct.y1 + 60;
       dim(m.centerX + m.centerW / 2, ry, ct.x1, ry, '半叶 ' + Math.round(m.halfW), (m.centerX + m.centerW / 2 + ct.x1) / 2, ry + 55);

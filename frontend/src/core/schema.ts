@@ -36,22 +36,19 @@ export interface SchemaCluster { id: string; title: string; open: number; groups
 
 /* ---------------- 分组（扁平，key 唯一） ---------------- */
 
-/* 一·纸张设置：纸张 + 页边距 合并 */
-const gPaper: SchemaGroup = { id: 'paper', title: '纸张设置', open: 1, items: [
-  { k: 'canvas_width', lb: '纸宽', type: 'num', min: 600, max: 6000, step: 20, unit: 'px' },
-  { k: 'canvas_height', lb: '纸高', type: 'num', min: 600, max: 6000, step: 20, unit: 'px' },
+/* 一·尺寸（宽高 · 边距）：纸宽/纸高 + 页边距（纸色/宣纹/底图 已并入 c1 纸张组） */
+const gPaper: SchemaGroup = { id: 'paper', title: '尺寸（宽高 · 边距）', open: 1, items: [
+  { k: 'canvas_width', lb: '宽度', type: 'num', min: 600, max: 6000, step: 20, unit: 'px' },
+  { k: 'canvas_height', lb: '高度', type: 'num', min: 600, max: 6000, step: 20, unit: 'px' },
   { k: 'margins_top', lb: '上边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
   { k: 'margins_bottom', lb: '下边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
   { k: 'margins_left', lb: '左边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
   { k: 'margins_right', lb: '右边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
-  { k: 'canvas_color', lb: '纸色', type: 'color' },
-  { k: 'xuanwen', lb: '宣纹', type: 'bool', link: 'canvas_background_image', onval: 'textures/xuan.jpg', tip: '打开=底图使用宣纸纹理（textures/xuan.jpg），关闭=恢复纯色（与「底图」字段同步）' },
-  { k: 'canvas_background_image', lb: '底图', type: 'text', ph: '留空=纯色；填图片路径/dataURL=拉伸铺满纸张' },
 ]}
 
 /* 二·版框：列数 + 外框(粗线) + 内框(细线) + 界行（列数自「版心与版界」迁入） */
 const gFrame: SchemaGroup = { id: 'frame', title: '版框（列数 · 边框 · 界行）', open: 1, items: [
-  { k: 'leaf_col', lb: '半叶列数', type: 'num', min: 1, max: 40, step: 1, unit: '列', tip: '列数决定字格横向排布，与「版界」共同定位版心；现置于版框组，因它直接约束内容区列划分' },
+  { k: 'leaf_col', lb: '半叶列数', type: 'num', min: 1, max: 40, step: 1, unit: '列', tip: '列数决定字格横向排布，与「版心宽」共同定位版心；现置于版框组，因它直接约束内容区列划分' },
   { k: 'outline_width', lb: '外框线宽', type: 'num', min: 0, max: 40, step: 1, unit: 'px' },
   { k: 'outline_color', lb: '外框线色', type: 'color' },
   { k: 'inline_width', lb: '内框线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
@@ -63,13 +60,27 @@ const gFrame: SchemaGroup = { id: 'frame', title: '版框（列数 · 边框 · 
   { k: 'vline_color', lb: '界行线色', type: 'color', show: s => !!s.if_vline },
 ]}
 
-/* 三·版心样式：按「版界(版心边界) / 中缝(竖线·象鼻) / 分割线(横线) / 鱼尾」四个独立概念拆分，互不混淆 */
-const gLeafBorder: SchemaGroup = { id: 'leafborder', title: '版界（版心边界）', open: 1, items: [
-  { k: 'leaf_center_width', lb: '版界宽', type: 'num', min: 0, max: 600, step: 5, unit: 'px', tip: '版界宽同时决定版界线间距与鱼尾宽' },
-  { k: 'fish_line_width', lb: '版界线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
-  { k: 'fish_line_color', lb: '版界线色', type: 'color' },
+/* 版心（宽度 · 界线 · 堂号）：版心水平宽度、两侧边界线、版心堂号，归入叶面设置（c1），与纸张/版框同属版面硬几何 */
+const gLeafBorder: SchemaGroup = { id: 'leafborder', title: '版心（宽度 · 界线 · 堂号）', open: 1, items: [
+  { k: 'leaf_center_width', lb: '版心宽', type: 'num', min: 0, max: 600, step: 5, unit: 'px', tip: '版心宽同时决定版心界线间距与鱼尾宽' },
+  { k: 'fish_line_width', lb: '版心界线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
+  { k: 'fish_line_color', lb: '版心界线色', type: 'color' },
+  /* 版心堂号：版心上的图片素材（与鱼尾/书名/页码并列，正文每叶都出现；src 空 = 不输出） */
+  { k: 'seam_stamp_src', lb: '堂号图', type: 'asset',
+    tip: '从项目 assets/ 选图，盖在版心上（与鱼尾、书名、页码并列），正文每叶都出现；留空 = 不输出。'
+      + '素材入库时 PNG 会自动裁掉四周透明边，避免「占叶宽百分比」与实际视觉不符' },
+  { k: 'seam_stamp_pos', lb: '堂号纵向位置', type: 'num', min: 0, max: 1, step: 0.01,
+    show: s => !!s.seam_stamp_src,
+    tip: '在版心上的位置：0 = 内容区顶，1 = 内容区底（默认 0.5 正中，此处没有鱼尾/书名/页码，不会撞）。'
+      + '可在预览里按住上下拖动 —— 这是唯一的可调方向，横向恒居中于版心' },
+  { k: 'seam_stamp_w', lb: '堂号宽', type: 'num', min: 0.1, max: 1, step: 0.05, unit: '× 版心宽',
+    show: s => !!s.seam_stamp_src,
+    tip: '占「版心宽度」的比例（默认 0.6），版心窄的模板自动缩小；高度按图片原始宽高比推导，不会变形' },
+  { k: 'seam_stamp_opacity', lb: '堂号浓淡', type: 'num', min: 0.1, max: 1, step: 0.02,
+    show: s => !!s.seam_stamp_src, tip: '不透明白分比。0.9 接近实盖，调低更像淡印' },
 ]}
 
+/* 三·版心样式（剩余）：按「中缝(竖线·象鼻) / 分割线(横线) / 鱼尾」三个独立概念拆分，互不混淆（版心宽·版界线 已归入 c1 叶面设置） */
 /* 中缝 = 版心中轴竖线（象鼻）；单/双象鼻 = 单/双竖线，由 if_seam 控制。横线（分割线）不在此处，见 gDivider 组 */
 const gSeam: SchemaGroup = { id: 'seam', title: '中缝（版心中轴竖线 · 象鼻）', open: 1, items: [
   { k: 'if_seam', lb: '中缝样式', type: 'sel', opts: [['none', '无'], ['single', '单象鼻'], ['double', '双象鼻']], tip: '中缝 = 版心中轴竖线（象鼻）；单/双象鼻 = 单/双竖线。横线（上/下分割线）垂直于中缝、在「分割线」组单独设色，与此处无关' },
@@ -112,7 +123,7 @@ const gCenter: SchemaGroup = { id: 'center', title: '版心文字（书名 / 卷
   { k: 'title_text', lb: '书名', type: 'text', roBook: 1, tip: '书级只读：真源 = 项目信息里的「图书名称」（点「项目信息」去改）；留空按「项目名称」回落显示，项目名称也为空时显示占位「图书名称」。此处清空不会再冲掉项目元信息（2026-09-24 用户定）。单元作用域下仍可覆盖 = 只改本单元版心书名，清空即本单元版心不排书名（目录用的就是这条）' },
   { k: 'title_postfix', lb: '卷次后缀', type: 'text', ph: '卷X，X 自动替换为卷号', tip: '正文卷已有分组名时按分组名显示，此项仅在无分组名（默认卷/导读附录）时兜底' },
   { k: 'title_volnames', lb: '逐卷卷名', type: 'text', ph: '道经|德经，按卷序以 | 分隔', tip: '正文卷已有分组名时按分组名显示，此项仅作兜底' },
-  { k: 'if_tpcenter', lb: '书名对齐', type: 'seg', opts: [['center', '居中'], ['left', '居左'], ['right', '居右']], tip: '居中 = 版心正中（古法默认）；居左/居右 = 竖列贴版界左/右缘。对折页先看右叶，默认居右更贴合读取顺序' },
+  { k: 'if_tpcenter', lb: '书名对齐', type: 'seg', opts: [['center', '居中'], ['left', '居左'], ['right', '居右']], tip: '居中 = 版心正中（古法默认）；居左/居右 = 竖列贴版心左/右缘。对折页先看右叶，默认居右更贴合读取顺序' },
   { k: 'title_font_size', lb: '书名字号', type: 'num', min: 10, max: 200, step: 2, unit: 'px' },
   { k: 'title_font_family', lb: '书名卷次字体', type: 'fam' },
   { k: 'title_y_auto', lb: '书名 Y 自动', type: 'bool', tip: '勾选后书名 Y 按内容区比例（上内框 + 纵向 20%）落位，即上—中鱼尾之间；取消勾选可手填' },
@@ -253,25 +264,11 @@ const gPunc: SchemaGroup = { id: 'punc', title: '标点处理（正文 · 夹注
   { k: 'accent_comma_90', lb: '批文·竖排标点字符', type: 'text', tip: '缺省 = 与正文同字符集（「」〔〕…（）类），使用字体竖排字形（vert）立起来' },
   { k: 'accent_comma_fullwidth', lb: '批文半角转全角', type: 'bool', tip: '缺省 = 开启；将批文段内半角标点转全角' },
 ]}
-
-/* 十三·版心堂号 */
-const gSeamStamp: SchemaGroup = { id: 'seamstamp', title: '版心堂号（版界图片）', open: 0, items: [
-  { k: 'seam_stamp_src', lb: '堂号图', type: 'asset',
-    tip: '从项目 assets/ 选图，盖在版心版界上（与鱼尾、书名、页码并列），正文每叶都出现；留空 = 不输出。'
-      + '素材入库时 PNG 会自动裁掉四周透明边，避免「占叶宽百分比」与实际视觉不符' },
-  { k: 'seam_stamp_pos', lb: '纵向位置', type: 'num', min: 0, max: 1, step: 0.01,
-    show: s => !!s.seam_stamp_src,
-    tip: '在版界上的位置：0 = 内容区顶，1 = 内容区底（默认 0.5 正中，此处没有鱼尾/书名/页码，不会撞）。'
-      + '可在预览里按住上下拖动 —— 这是唯一的可调方向，横向恒居中于版界' },
-  { k: 'seam_stamp_w', lb: '宽度', type: 'num', min: 0.1, max: 1, step: 0.05, unit: '× 版界宽',
-    show: s => !!s.seam_stamp_src,
-    tip: '占「版界宽度」的比例（默认 0.6），版界窄的模板自动缩小；高度按图片原始宽高比推导，不会变形' },
-  { k: 'seam_stamp_opacity', lb: '浓淡', type: 'num', min: 0.1, max: 1, step: 0.02,
-    show: s => !!s.seam_stamp_src, tip: '不透明白分比。0.9 接近实盖，调低更像淡印' },
-]}
-
-/* 十四·叶面水印 */
-const gWatermark: SchemaGroup = { id: 'watermark', title: '叶面水印（正文每叶）', open: 0, items: [
+/* 十四·纸张（底色·宣纹·底图 + 水印图） */
+const gWatermark: SchemaGroup = { id: 'watermark', title: '纸张', open: 0, items: [
+  { k: 'canvas_color', lb: '纸色', type: 'color' },
+  { k: 'xuanwen', lb: '宣纹', type: 'bool', link: 'canvas_background_image', onval: 'textures/xuan.jpg', tip: '打开=底图使用宣纸纹理（textures/xuan.jpg），关闭=恢复纯色（与「底图」字段同步）' },
+  { k: 'canvas_background_image', lb: '底图', type: 'text', ph: '留空=纯色；填图片路径/dataURL=拉伸铺满纸张' },
   { k: 'watermark_src', lb: '水印图', type: 'asset',
     tip: '盖在纸张上的图片，压在版框与文字之下，正文每叶都出现；留空 = 不输出。'
       + '水印范围只含正文叶（封面/扉页/牌记/尾页不参与）' },
@@ -289,28 +286,26 @@ const gWatermark: SchemaGroup = { id: 'watermark', title: '叶面水印（正文
 export const SCHEMA: SchemaGroup[] = [
   gPaper, gFrame, gLeafBorder, gSeam, gDivider, gFish, gCenter,
   gGrid, gBody, gComment, gAccent, gChapter, gBadge, gRuby,
-  gPunc, gSeamStamp, gWatermark,
+  gPunc, gWatermark,
 ]
 
-/* ---------------- 4 簇聚类（渲染用） ---------------- */
-/* 一个版面 = 页面版框 + 版心内容 + 内容样式 + 叠加装饰
-   版心内容 = 版心样式（版界 · 中缝 · 分割线 · 鱼尾）+ 版心文字（书名 · 卷次 · 页码）
-   内容样式 = 界行内容（字格 · 正文 · 夹注 · 批文 · 章节 · 徽标 · 注音 · 标点） */
+/* ---------------- 3 簇聚类（渲染用） ---------------- */
+/* 一个版面 = 叶面设置 + 版心样式 + 内容样式
+   （原「叠加装饰」仅剩的「叶面水印」已并入 c1 叶面设置，故面板不再单列第四簇）
+   叶面设置簇 = 尺寸（宽高·边距）+ 版框 + 版心（版心宽 · 版心界线 · 堂号）+ 纸张（纸色·宣纹·底图·水印图）
+   版心样式簇 = 版心样式（中缝 · 分割线 · 鱼尾）+ 版心文字（书名 · 卷次 · 页码）
+   内容样式簇 = 界行内容（字格 · 正文 · 夹注 · 批文 · 章节 · 徽标 · 注音 · 标点） */
 export const CLUSTERS: SchemaCluster[] = [
   {
-    id: 'c1', title: '一·页面版框', open: 1,
-    groups: [gPaper, gFrame],
+    id: 'c1', title: '一·叶面设置', open: 1,
+    groups: [gPaper, gFrame, gLeafBorder, gWatermark],
   },
   {
-    id: 'c2', title: '二·版心内容', open: 1,
-    groups: [gLeafBorder, gDivider, gSeam, gFish, gCenter],
+    id: 'c2', title: '二·版心样式', open: 1,
+    groups: [gDivider, gSeam, gFish, gCenter],
   },
   {
     id: 'c3', title: '三·内容样式', open: 0,
     groups: [gGrid, gBody, gComment, gAccent, gChapter, gBadge, gRuby, gPunc],
-  },
-  {
-    id: 'c4', title: '四·叠加装饰', open: 0,
-    groups: [gSeamStamp, gWatermark],
   },
 ]
