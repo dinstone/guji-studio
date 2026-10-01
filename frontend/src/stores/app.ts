@@ -11,8 +11,9 @@ import { hasRuby } from '../core/ruby'
 
 /* 目录（派生单元）默认版式差异：版心略放宽让「章名 + 页码」排得开，
  * 一/二级标题字号加大、正文行距宽松，便于检索。
- * 只保留与引擎 DEFAULT_TEMPLATE 不同的键（与「单元模板只存差异」铁律一致）；
- * 否则会把 canvas_background_image:'' 等默认值也写进覆盖，冲掉书级宣纹等生效值。
+ * 只保留**真正想改**的键（与「单元模板只存差异」铁律一致）：解析时「与书级生效值不同」
+ * 就一律生效，故把引擎默认值（如 canvas_background_image:''）写进覆盖会冲掉书级宣纹
+ * 等生效值 —— 想跟随书级就别写这个键，别写「和默认一样」当占位。
  * 随「新增目录」单元自动挂上，走「本单元」覆盖机制，Inspector 可继续微调。
  * 注：这是单元级参数，不属于整书级模板库（库项套用会全量替换整书版式，故不放库）。 */
 export const TOC_TPL: Record<string, any> = {
@@ -360,14 +361,20 @@ export function resolveTplBlock(block?: Block | Volume): Record<string, any> {
      而书级残留的空书名 / 旧书名不会再漏到渲染端。 */
   const base: Record<string, any> = { ...tpl, title_text: bookTitle() }
   if (!ov || !Object.keys(ov).length) return finalizeTpl(base)
-  /* 单元模板只应存「与书级不同的差异字段」。若种子/旧数据把引擎默认值
-   * （如 canvas_background_image:''）也写进覆盖，会把它后面的书级生效值
-   * （如宣纹 textures/xuan.jpg）冲掉——目录等派生单元因此拿不到书级宣纹。
-   * 故与引擎默认相同的字段视为「无覆盖」跳过，让书级生效值透传。 */
-  const D = LayoutEngine.DEFAULT_TEMPLATE as Record<string, any>
+  /* 单元模板只应存「与书级不同的差异字段」——判定「算不算覆盖」一律拿**书级生效值**比：
+   *   与书级不同 → 一律生效（含「有意改回引擎默认值」，如全书三鱼尾、本单元双鱼尾）；
+   *   与书级相同 → 此刻视为冗余，跳过（渲染值本来就一样，跳不跳无差别）。
+   * 注：冗余键仍留在单元模板里 —— 日后书级改了该项，单元会以写下的原值钉住、不再跟随；
+   * 这是「显式覆盖」的预期语义，要恢复跟随按「还原覆盖」（tplRevert）删键即可。
+   * 旧规则拿引擎 DEFAULT_TEMPLATE 比，会把「有意改回默认值」的覆盖一并吞掉：
+   *   全书鱼尾=三鱼尾（≠默认 double）时，本单元选「双鱼尾」（== 默认）被静默丢弃，
+   *   回落书级三鱼尾 → 双/三鱼尾视觉同效（2026-10-01 用户报）。
+   * 与包装叶 spSet / resolveLeafCfg 同款口径（那里也是拿书级值比较，故叶级能改回默认）。
+   * 若日后又出现「把引擎默认值整份写进单元覆盖」的脏数据，清洗点应在**写入侧**
+   * （单元只存差异），不能在解析侧——解析侧无法区分「脏数据」与「有意改回默认」。 */
   const out: Record<string, any> = { ...base }
   for (const k of Object.keys(ov)) {
-    if (ov[k] === D[k]) continue
+    if (ov[k] === base[k]) continue
     out[k] = ov[k]
   }
   return finalizeTpl(out)
@@ -1182,6 +1189,14 @@ function markClean() {
 function anyDirty(): boolean {
   return dirty.book || dirty.setting || dirty.publish || dirty.texts.size > 0 || dirty.blocks.size > 0
 }
+/* 固定单元（序/目录/跋/牌记）脏签名 —— 初始化快照与 diffBlocks 共用同一函数，
+ * 避免两处各写一份表达式后走样（2026-10-01 就因此漏项）。
+ * **`p: b.template` 必须在签名里**：单元版式覆盖（「本单元」档位改的 params）存在
+ * block.template 且落 setting.json，签名不含它 → 改版式不标脏 → 自动保存永不触发
+ * → 重启后覆盖丢失（用户报「本单元双鱼尾与三鱼尾同效」时查出的同源问题之一）。 */
+function blockSig(b: Block): string {
+  return JSON.stringify({ x: (b.chapters || []).map(c => c.text).join('\n'), d: b.derived, m: b.mode, p: b.template })
+}
 /* 打开/新建项目后把快照重置为「当前已落盘状态」，避免把载入过程当成变更。 */
 function initDirtySnapshots() {
   snapChap = new Map()
@@ -1191,9 +1206,7 @@ function initDirtySnapshots() {
     snapVol.set(v.id, JSON.stringify({ n: v.name, p: v.template, o: v.chapters.map(c => c.id) }))
     for (const c of v.chapters) snapChap.set(c.id, JSON.stringify({ x: c.text, t: c.title }))
   }
-  for (const b of [...proj.tree.guide, ...proj.tree.appendix]) {
-    snapBlock.set(b.type, JSON.stringify({ x: (b.chapters || []).map(c => c.text).join('\n'), d: b.derived, m: b.mode }))
-  }
+  for (const b of [...proj.tree.guide, ...proj.tree.appendix]) snapBlock.set(b.type, blockSig(b))
 }
 
 function diffScrolls() {
@@ -1231,7 +1244,7 @@ function diffBlocks() {
   const cur = new Map<string, string>()
   let changed = false
   for (const b of [...proj.tree.guide, ...proj.tree.appendix]) {
-    const sig = JSON.stringify({ x: (b.chapters || []).map(c => c.text).join('\n'), d: b.derived, m: b.mode })
+    const sig = blockSig(b)   // 含 p(template)：单元版式覆盖变更同样要标脏落盘
     cur.set(b.type, sig)
     const prev = snapBlock.get(b.type)
     if (prev === undefined || prev !== sig) { changed = true; dirty.blocks.add(b.type) }
