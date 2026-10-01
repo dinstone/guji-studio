@@ -46,9 +46,8 @@ const gPaper: SchemaGroup = { id: 'paper', title: '尺寸（宽高 · 边距）'
   { k: 'margins_right', lb: '右边距', type: 'num', min: 0, max: 800, step: 5, unit: 'px' },
 ]}
 
-/* 二·版框：列数 + 外框(粗线) + 内框(细线) + 界行（列数自「版心与版界」迁入） */
-const gFrame: SchemaGroup = { id: 'frame', title: '版框（列数 · 边框 · 界行）', open: 1, items: [
-  { k: 'leaf_col', lb: '半叶列数', type: 'num', min: 1, max: 40, step: 1, unit: '列', tip: '列数决定字格横向排布，与「版心宽」共同定位版心；现置于版框组，因它直接约束内容区列划分' },
+/* 二·版框：外框(粗线) + 内框(细线) + 界行（列数已迁入 c3「字格」组，置于每列字数之前） */
+const gFrame: SchemaGroup = { id: 'frame', title: '版框（边框 · 界行）', open: 1, items: [
   { k: 'outline_width', lb: '外框线宽', type: 'num', min: 0, max: 40, step: 1, unit: 'px' },
   { k: 'outline_color', lb: '外框线色', type: 'color' },
   { k: 'inline_width', lb: '内框线宽', type: 'num', min: 0, max: 20, step: 1, unit: 'px' },
@@ -141,8 +140,9 @@ const gCenter: SchemaGroup = { id: 'center', title: '版心文字（书名 / 卷
   { k: 'pager_color', lb: '页码颜色', type: 'color' },
 ]}
 
-/* 五·字格：列/行几何（行与正文拆分出的「格子」部分） */
-const gGrid: SchemaGroup = { id: 'grid', title: '字格（每列字数 · 行列定位 · 字号自适应）', open: 1, items: [
+/* 五·字格：列/行几何（列数 + 行与正文拆分出的「格子」部分；半叶列数置顶，在每列字数之前） */
+const gGrid: SchemaGroup = { id: 'grid', title: '字格（列数 · 字数 · 定位 · 字号）', open: 1, items: [
+  { k: 'leaf_col', lb: '半叶列数', type: 'num', min: 1, max: 40, step: 1, unit: '列', tip: '列数决定字格横向排布，与「版心宽」共同定位版心' },
   { k: 'row_num', lb: '每列字数', type: 'num', min: 4, max: 80, step: 1, unit: '字' },
   { k: 'row_start_auto', lb: '起始线自动', type: 'bool' },
   { k: 'row_top_pad', lb: '起始留白', type: 'num', min: 0, max: 300, step: 5, unit: 'px', show: s => s.row_start_auto },
