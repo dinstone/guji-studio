@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { CLUSTERS, type SchemaItem, type SchemaGroup, type SchemaCluster } from '../core/schema'
+import { LayoutEngine } from '../core/engine'
 import {
   PAPER_SIZES, paperLabel, paperPx, exactPaper, matchPaper, type Orientation,
 } from '../core/papersize'
@@ -59,6 +60,40 @@ function srcInfo(k: string) {
 }
 function onSrcClick(k: string) {
   if (unit.value && tplOverridden(k)) tplRevert(k)
+}
+
+/* ---- 批文字号：显示投影 + 密度接管（用户 2026-10-02） ----
+ * 「批文字号」框始终显示当前生效字号：有显式值用它，无显式值时投影 = 引擎缺省回落
+ *   accentFs = min(正文格高 / N, 列宽 × 字号列宽上限)   （同 engine:1351）
+ * —— 所以未手动指定时框里也恒有数字，且随密度实时变（N↑ 格高↓ 字号↓）。
+ * 用户在框里输入 → 变成显式值（覆盖投影）；改「批文密度」→ 强制接管，把新生效值写回成为显式值。
+ * 反向：改字号不动密度。 */
+const E = LayoutEngine
+const toNum = (v: any, d: number) => { const n = parseFloat(v); return isFinite(n) ? n : d }
+/* 当前密度下的生效字号（调用引擎单一真源，与渲染缺省完全同式） */
+const accentFsAuto = computed(() => {
+  const N = Math.max(1, Math.round(toNum(tplEdit.accent_density, 2)))
+  const m: any = E.computeMetrics(tplEdit)
+  return Math.round(E.accentDefaultFontSize(m.cellH / N, m.colW, tplEdit.text_col_ratio) * 10) / 10
+})
+/* 输入框显示值：显式值优先，否则投影生效值 */
+const dispAccentFs = computed(() => {
+  const v = toNum(tplEdit.accent_font_size, NaN)
+  return (isFinite(v) && v > 0) ? tplEdit.accent_font_size : accentFsAuto.value
+})
+/* 手动输入批文字号 → 落为显式值（清空 = 恢复跟随密度） */
+function onAccentFsInput(e: Event) {
+  const el = e.target as HTMLInputElement
+  const raw = el.value.trim()
+  if (raw === '') { tplEdit.accent_font_size = ''; return }
+  const n = parseFloat(raw)
+  if (isFinite(n) && n > 0) tplEdit.accent_font_size = n
+  else el.value = String(dispAccentFs.value)
+}
+/* 改「批文密度」→ 强制接管：把新生效值写回批文字号（成为显式值） */
+function onNumChange(k: string) {
+  if (k !== 'accent_density') return
+  tplEdit.accent_font_size = accentFsAuto.value
 }
 
 /* 把当前图书版式导入模板库（内容字段在 store 内剥离） */
@@ -185,8 +220,17 @@ const paperHint = computed(() => {
                 >{{ srcInfo(it.k).text }}</span>
                 <label class="lb" :class="{ inhr: unit && !tplOverridden(it.k) }">{{ it.lb }}</label>
                 <div class="ctl">
-                  <template v-if="it.type === 'num'">
-                    <input v-model.number="tplEdit[it.k]" type="number" :min="it.min" :max="it.max" :step="it.step">
+                  <!-- 批文字号：始终显示生效值（无显式值时投影密度推导值）；手动输入即显式值 -->
+                  <template v-if="it.k === 'accent_font_size'">
+                    <input
+                      type="number" :min="it.min" :max="it.max" :step="it.step"
+                      :value="dispAccentFs" @input="onAccentFsInput"
+                      title="当前生效字号：未手动指定时跟随「批文密度」；输入即固定为该值"
+                    >
+                    <span v-if="it.unit" class="unit">{{ it.unit }}</span>
+                  </template>
+                  <template v-else-if="it.type === 'num'">
+                    <input v-model.number="tplEdit[it.k]" type="number" :min="it.min" :max="it.max" :step="it.step" @change="onNumChange(it.k)">
                     <span v-if="it.unit" class="unit">{{ it.unit }}</span>
                   </template>
                   <template v-else-if="it.type === 'bool'">

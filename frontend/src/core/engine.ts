@@ -160,6 +160,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     /* 夹注：comment_ydis 默认跟随正文行距 → 双行夹注严格占 1 个正文字位（栅格锁前提） */
     comment_size_auto: 1, comment_size_ratio: 0.5, comment_font1_size: 45,
     comment_ydis: 1.05, comment_font_color: '#3a3a3a', comment_font_family: 'song_tc',
+    accent_density: 2,            // 批文独立列密度：1 个正文格容纳 N 个批文格（整数；bandCellH = 正文格高 / N）
     /* 版心文字 */
     title_text: '图书名称', title_postfix: '卷X', title_volnames: '', if_tpcenter: 'right',
     title_font_size: 96, title_y: 1013, title_ydis: 1.05, title_color: '#141414',
@@ -565,13 +566,31 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
           continue;
         }
       }
-      /* {徽标}：随文注释徽标锚点；无闭符或跨行的 { 视为普通字符 */
+      /* {徽标}：随文注释徽标锚点；无闭符或跨行的 { 视为普通字符。
+         前视（用户 2026-10-02）：若 {徽标} 之后仅隔空白就紧邻批注段 [，则把徽标并入该批注
+         token 的**列头**——徽标本属它标注的那段批注，不该被独立列切成两列。
+         等价于自动把徽标挪进括号内（[{徽标}…]），复用现有「批注内徽标」通道。 */
       if (ch === '{') {
         var endB = src.indexOf('}', i + 1);
         var btxt = endB > i ? src.slice(i + 1, endB) : '';
         if (btxt && btxt.indexOf('{') < 0 && btxt.indexOf('\n') < 0) {
           btxt = btxt.trim();
-          if (btxt && num(t.badge_show, 1)) toks.push({ t: 'badge', text: btxt, pos: i });
+          if (btxt && num(t.badge_show, 1)) {
+            var kB = endB + 1;
+            while (kB < src.length && (src.charAt(kB) === ' ' || src.charAt(kB) === '\t')) kB++;
+            if (src.charAt(kB) === aOpen) {
+              var endBA = src.indexOf(aClose, kB + 1);
+              if (endBA > kB) {
+                var aTextB = src.slice(kB + 1, endBA);
+                if (num(t.accent_comma_fullwidth, num(t.comment_comma_fullwidth, 1))) aTextB = toFullwidthPunct(aTextB);
+                var cbB = splitBadge(aTextB, num(t.badge_show, 1));
+                toks.push({ t: 'accent', chars: [{ badge: btxt, accentHead: true }].concat(cbB.chars), pos: i,
+                            posArr: [i].concat(cbB.poses.map(function (x) { return kB + 1 + x; })) });
+                i = endBA + 1; continue;
+              }
+            }
+            toks.push({ t: 'badge', text: btxt, pos: i });
+          }
           i = endB + 1; continue;
         }
       }
@@ -657,20 +676,30 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
        Math.min 兜底：N 超过 rowNum−1 时续列会被吃空，钳到 rowNum−1 留至少 1 格可用 */
     var wrapIndent = Math.min(num(t.wrap_indent, 0), m.rowNum - 1);
 
+    /* 批文独立列：每列自带 cellH/rowNum。body 列用正文网格；批文列用 band 网格。
+       bandCellH = cellH / N（N = accent_density，整数 → 批文格线压正文格线）。 */
+    var aDensity = Math.max(1, Math.round(num(t.accent_density, 2)));
+    var bandCellH = m.cellH / aDensity;
+    var bandRowNum = m.rowNum * aDensity;
+    var curMode = 'body', curCellH = m.cellH, curRowNum = m.rowNum;
+    function applyCurGrid() { var c = cur.cols[colIdx]; if (c) { c.cellH = curCellH; c.rowNum = curRowNum; } }
+
     /* ^注音^ 挂靠用：每一轮循环重置，保证只有「紧挨着的上一个字形」能被注音挂上
        （跨换列、跨换页、跨其他标记都不成立 → 回落为普通字符） */
     var prevChar = null;
 
     function newPage() {
       cur = { vol: 1, leaf: leafInVol + 1, cols: [] };
-      for (var i = 0; i < nCols; i++) cur.cols.push({ x: colDefs[i].x, half: colDefs[i].half, items: [] });
+      for (var i = 0; i < nCols; i++) cur.cols.push({ x: colDefs[i].x, half: colDefs[i].half, items: [], cellH: curCellH, rowNum: curRowNum });
       pages.push(cur);
       leafInVol++;
       colIdx = 0; rowPos = 0;
+      applyCurGrid();
     }
     function nextCol(indent = 0) {
       colIdx++; rowPos = indent;
       if (colIdx >= nCols) newPage();
+      else applyCurGrid();
     }
     newPage();
 
@@ -725,11 +754,10 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
         }
         continue;
       }
-      if (tk.t === 'badge') {              // 注释徽标：默认 1 字格；设定大字号时按框高自动占多格
+      if (tk.t === 'badge') {              // 注释徽标：按花框实高占**正文字格**（单一真源 badgeFlowerCellCount）
         placed = true;
         var bn = String(tk.text).length;
-        var bSz = num(t.badge_size, 0) > 0 ? num(t.badge_size, 0) : m.fontSize * 0.72;
-        var bspan = Math.max(1, Math.ceil(bSz * (bn + 0.32) / m.cellH - 1e-9));
+        var bspan = badgeFlowerCellCount(m.fontSize, t.badge_size, bn, m.cellH);
         if (rowPos + bspan > m.rowNum) nextCol(wrapIndent);
         cur.cols[colIdx].items.push({ type: 'badge', text: tk.text, row: rowPos, span: bspan, _pos: tk.pos });
         rowPos += bspan;
@@ -761,7 +789,10 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
         prevChar = rLast;
         continue;
       }
-      if (tk.t === 'br') { nextCol(); continue; }
+      /* 换行 = 另起一列。本列已空时不推进（说明已站在「新列」起点），
+         否则会与批文列的进/出 nextCol 叠加，空出一张孤列
+         （用户 2026-10-02 反馈「批注前后各有一个空列」）。 */
+      if (tk.t === 'br') { if (cur.cols[colIdx].items.length) nextCol(); continue; }
       if (tk.t === 'char') {
         placed = true;
         var nop = !!nopSet[tk.c], rot = !!rotSet[tk.c];
@@ -832,19 +863,41 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
       }
       if (tk.t === 'accent') {
         placed = true;
+        /* 批文 → 独立列：body 列保留已排内容（下方留白），切到新列走 band 网格。
+           仅当本列**已有内容**才离开；本列为空则直接复用（改网格即可）。
+           否则会与前置换行 \\n 的 nextCol 叠加，空出一张孤列
+           （用户 2026-10-02 反馈「批注前后各有一个空列」）。 */
+        if (curMode !== 'accent') {
+          if (cur.cols[colIdx].items.length) nextCol(0);   // 空列不推进，直接改网格
+          curMode = 'accent';
+          curCellH = bandCellH; curRowNum = bandRowNum;
+          applyCurGrid();             // 当前列改为 band 网格
+          rowPos = 0;
+        }
         var acs = tk.chars;
         for (var ai = 0; ai < acs.length; ai++) {
           var ac = acs[ai];
-          /* 批文段内的换行：与正文一致触发换列（而非被当字形画成空格）。
-             源文本里的 \n 在 tokenizer 被整段切进 accent.chars，未转成 br token，
-             故在此显式处理——与顶层 \n→br→nextCol 行为对齐 */
-          if (ac === '\n') { nextCol(); continue; }
+          /* 批文段内的换行：与正文一致触发换列（批注列内续列） */
+          if (ac === '\n') { nextCol(0); continue; }
           if (typeof ac === 'object') {        // 徽标（{}）在批文段内仍可用
-            var abn = String(ac.badge).length;
-            var abSz = num(t.badge_size, 0) > 0 ? num(t.badge_size, 0) : m.fontSize * 0.72;
-            var abspan = Math.max(1, Math.ceil(abSz * (abn + 0.32) / m.cellH - 1e-9));
-            if (rowPos + abspan > m.rowNum) nextCol(wrapIndent);
-            cur.cols[colIdx].items.push({ type: 'badge', text: ac.badge, row: rowPos, span: abspan, _pos: (tk.posArr && tk.posArr[ai] != null ? tk.posArr[ai] : tk.pos) });
+            /* 批注列内徽标：与夹注内徽标同规则——**字数 = 格数**（每字 1 个批文格）。
+               徽标虽与该批文同列，但它不属于批文段内容（语义上只是紧邻），
+               所以只按「所在网格的字格」占位：字形/框高由该格高决定，见 drawColumn。
+               badge_size / badge_font 仅作用于正文徽标（用户 2026-10-02）。 */
+            var abn = Math.max(1, String(ac.badge).length);
+            var abspan = abn;
+            if (ac.accentHead) {
+              /* 批文**外**徽标（{徽标} 紧邻 []）走花框，尺寸与正文/夹注外**同一组参数**
+                 （不随批文格，见 badgeFlowerReqSize），**占格也按正文字格量**
+                 （badgeFlowerCellCount → 与正文/夹注外的花框占同样多的正文字格），
+                 再 × N 换算成本列批文格数——花框才不会比正文/夹注前的小一半、
+                 也不会压住下面的批文（用户 2026-10-02：译文也要占 2 个正文字格）。 */
+              var abFs = m.textFs != null ? m.textFs : m.fontSize;
+              var abCells = badgeFlowerCellCount(abFs, t.badge_size, abn, m.cellH);   // 正文字格数
+              abspan = Math.min(curRowNum, Math.max(abn, abCells * aDensity));        // → 本列批文格数
+            }
+            if (rowPos + abspan > curRowNum) nextCol(0);
+            cur.cols[colIdx].items.push({ type: 'badge', text: ac.badge, row: rowPos, span: abspan, accent: true, accentHead: !!ac.accentHead, _pos: (tk.posArr && tk.posArr[ai] != null ? tk.posArr[ai] : tk.pos) });
             rowPos += abspan;
             continue;
           }
@@ -855,18 +908,22 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
           var aunit = 1;
           if (anop) aunit = aHang ? 0 : 1;
           else if (arot) aunit = 1;
-          if (rowPos + aunit > m.rowNum) {
+          if (rowPos + aunit > curRowNum) {
             /* 与正文同规：闭号不新起列，「标点压缩」排到末字之后的列底余白里 */
             var aIsClose = anop || (arot && CLOSE_PUNCT.indexOf(ac) >= 0);
             var asq = cur.cols[colIdx].items, atgt = null;
             if (aIsClose) for (var asi2 = asq.length - 1; asi2 >= 0; asi2--)
               if (asq[asi2].type === 'char') { atgt = asq[asi2]; break; }
             if (atgt && (atgt.sqz || []).length < 2) { (atgt.sqz = atgt.sqz || []).push(ac); continue; }
-            nextCol(wrapIndent);
+            nextCol(0);
           }
           cur.cols[colIdx].items.push({ type: 'char', c: ac, kind: 'text', row: rowPos, nop: anop, rot: arot, pMode: aMode, accent: true, _pos: (tk.posArr && tk.posArr[ai] != null ? tk.posArr[ai] : tk.pos) });
           rowPos += aunit;
         }
+        /* 批文结束 → 回到 body 列续排 */
+        curMode = 'body';
+        curCellH = m.cellH; curRowNum = m.rowNum;
+        nextCol(0);
         continue;
       }
       if (tk.t === 'comment') {
@@ -1265,20 +1322,34 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
   }
 
   /* ----------------------------------------------------------- 5. 渲染 SVG */
-  /* 注释徽标 SVG：牌记式竖排小徽标——外框圆角矩形 + 内框线 + 四角菱形花饰 + 竖排字
-     famFallback：所在位置字体（正文→正文字体，夹注→夹注字体）；
-     ctxOnly=1 时无视显式徽标字体设置，始终随所在位置（夹注内徽标永远随夹注） */
-  function badgeSvg(t, cx, cy, size, text, famFallback, ctxOnly) {
+  /* 注释徽标 SVG：竖排小徽标。尺寸口径 = **所在网格的字格**（用户 2026-10-02 定）——
+     「徽标在哪里就用那里的字格」：len 个字 → 占 len 个本地字格；字形 = 本地字格高（与所在处
+     密排文字同大，只有颜色不同）；框高 = len × 本地字格高（框线正好压在格线上，零衬距）。
+     size：ctxOnly=1 时 = 本地字格高（夹注行 / 批文列）；ctxOnly=0 时 = 字位（正文用，见下）。
+     maxW：可用行宽上限——框宽 1.12×字形不得越出（批注列 = 整列宽；夹注 = 半列宽即注行宽）。
+     famFallback：所在位置字体（正文→正文字体，夹注→夹注字体，批注列→批文字体）。
+     ctxOnly=1（夹注内徽标 + 批文内徽标）：无视显式徽标字体/字号设置，始终随所在网格字格——单层紧凑框
+       （无内框线/四角菱饰），字形 = 本地字格高、框高 = 字数×格高（用户 2026-10-02：注内须同一套围框）。
+     ctxOnly=0（正文 + 夹注外徽标 + 批文外徽标）：牌记式——外框圆角矩形 + 内框线 + 四角菱形花饰；
+       size = 字位 = badgeFlowerReqSize(fs, badge_size)（缺省 正文字号×0.72），字形 = 0.78×字位
+       （框留 0.16 呼吸衬距）。**三处同一组参数、同一尺寸**（用户 2026-10-02：「做一套就好，
+       一组参数就控制了」）——花框尺寸不随所在网格（旧行为按「占格高」折算，批文格 = 正文格/N
+       → 批文前花框只有 1/N 大，用户截图反馈「批文前花框比夹注前小」）。
+       夹注外徽标（{徽标} 紧邻 【）走正文徽标通道；批文外徽标（{徽标} 紧邻 []）由 tokenize 标 accentHead、
+       drawColumn 复用同一花框通道（占格按花框实高折算，见 paginate）。
+       注：牌记式框宽 = 1.26×字位，比一个正文字格还宽，装不进「1 字格」口径，故正文徽标
+       仍按 badge_size 独立设定（是否也改用字格口径待用户定）。 */
+  function badgeSvg(t, cx, cy, size, text, famFallback, ctxOnly, maxW) {
     var chars = String(text || '').split('');
+    var len = chars.length || 1;
     var col = t.badge_color || '#a8322a';
     var fam = familyStack(ctxOnly ? (famFallback || t.text_font_family)
                                   : (t.badge_font_family || famFallback || t.text_font_family));
-    /* ctxOnly（夹注内）：size = 徽标内文字字号，框贴字形（紧凑衬距）→ 字与注字几乎同大；
-       正文内：size = 字位，字形 = 0.78×字位（框留呼吸衬距） */
-    var gs = ctxOnly ? size : size * 0.78;
-    var pad = ctxOnly ? size * 0.04 : size * 0.16;
-    var bw = ctxOnly ? size * 1.12 : size * 1.26;
-    var bh = chars.length * gs + pad * 2;
+    /* ctxOnly：字形 = 本地字格高（框宽越限时按行宽回缩，保证围框不越出行宽） */
+    var gs = ctxOnly ? Math.min(size, maxW > 0 ? maxW / 1.12 : Infinity) : size * 0.78;
+    var pad = ctxOnly ? 0 : size * 0.16;
+    var bw = ctxOnly ? gs * 1.12 : size * 1.26;
+    var bh = len * gs + pad * 2;
     var x0 = cx - bw / 2, y0 = cy - bh / 2;
     var o = ['<g class="v-badge">'];
     o.push('<rect x="' + f(x0) + '" y="' + f(y0) + '" width="' + f(bw) + '" height="' + f(bh) +
@@ -1327,7 +1398,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     var fontT = familyStack(t.text_font_family);
     /* 批文样式（[] 包裹片段）：默认 = 正文字体 + 正文字号×0.9 + 正文颜色；可被 accent_* 覆盖 */
     var accentFont = familyStack(t.accent_font_family || t.text_font_family);
-    var accentFs = num(t.accent_font_size, fs * 0.9);
+    var accentFs = num(t.accent_font_size, accentDefaultFontSize(col.cellH, m.colW, t.text_col_ratio));
     var accentColor = t.accent_font_color || t.text_font_color;
     var fontC = familyStack(t.comment_font_family);
     /* 注音：横排西文衬线小字（绝不走 foreignObject/writing-mode，否则会被竖排旋转） */
@@ -1344,8 +1415,8 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
        「同于失：」的『：』与「飘风：」的『：』一高一低，同为避头压缩却两套落位）。
        两条路径改成共用本函数后，同页两子列的压缩标点严格同 y。 */
     function hungSlot(inkBot) {
-      var sBot = m.frame ? (m.frame.y + m.frame.h) : inkBot + m.cellH;
-      return { top: inkBot, h: Math.min(Math.max(0, sBot - inkBot), m.cellH * 0.5) };
+      var sBot = m.frame ? (m.frame.y + m.frame.h) : inkBot + col.cellH;
+      return { top: inkBot, h: Math.min(Math.max(0, sBot - inkBot), col.cellH * 0.5) };
     }
 
     for (var i = 0; i < col.items.length; i++) {
@@ -1393,8 +1464,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
         var aFont = isAcc ? accentFont : fontT;
         var aCol = isAcc ? accentColor : t.text_font_color;
         var aPCol = isAcc ? (t.accent_comma_color || accentColor) : (num(t.text_comma_zhu, 0) ? ZHU : commaColor);
-        var y = m.rowStartY + (it.row + 0.5) * m.cellH;
-        if (isAcc) y += num(t.accent_letter_spacing, 0) * aFs;   // 批文段字距（竖排下为纵向间隙）
+        var y = m.rowStartY + (it.row + 0.5) * col.cellH;
         /* 汉字墨迹居中补偿：字形 y 上移 δ×字号（em 框中心 → 汉字墨迹中心）。
            只改字形落位；prevGY（悬空标点挂靠基准）保持未补偿 —— 标点系统的 0.36 偏移是按真实
            渲染调出的经验值、其墨迹本就落在格心，故两者仍然对齐。 */
@@ -1417,7 +1487,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
           } else {
             /* 青简实测模型（ink 定量 132..141 vs 预期）：rot 标点字形占满原字格 → 格心
                （半角 0.5 格支持已移除——栅格锁下 0.5 格会产生行位碎片） */
-            var pyR = m.rowStartY + (it.row + 0.5) * m.cellH;
+            var pyR = m.rowStartY + (it.row + 0.5) * col.cellH;
             var pxR = cx + aFs * pRightT;
             out.push(foPunct(t, pxR, pyR - aFs * pUpT, aFs, aPCol, aFont, it.c, 'v-t v-t90', 0));
           }
@@ -1455,7 +1525,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
             /* y 两种模式统一 0.36（墨迹竖直落格心高度——居中观感的间隙已验证足够，
                 不会贴上一个字）；仅 x 区分：right=0.5（墨迹 +0.25 格居右）/ center=0.25（墨迹落格心） */
             var xOffN = (t.text_comma_pos === 'center') ? 0.25 : 0.5;
-            var pyN = m.rowStartY + (it.row + 0.5) * m.cellH;
+            var pyN = m.rowStartY + (it.row + 0.5) * col.cellH;
             out.push('<text class="v-t v-tnop" x="' + f(cx + aFs * (xOffN + pRightT)) + '" y="' + f(pyN - aFs * (0.36 + pUpT)) + '" font-size="' + f(aFs) +
                 '" fill="' + aPCol + '" font-family="' + esc(aFont) + '"' +
                 ' text-anchor="middle" dominant-baseline="central">' + esc(it.c) + '</text>');
@@ -1480,7 +1550,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
             var rW = Math.max(1, String(it.ruby).length * 0.62);   // 西文衬线平均字宽（em）粗估
             rFs = Math.min(rFs, (m.colW - 2 * rIns) / rW);
             if (rFs > 1) {
-              var rBand = m.cellH - RUBY_RUBY_RUBY_INK_HZ * aFs;             // 字间净空带高
+              var rBand = col.cellH - RUBY_RUBY_RUBY_INK_HZ * aFs;             // 字间净空带高
               var rSlack = Math.max(0, rBand - RUBY_BOX * rFs);    // 扣掉盒高后可供上下呼吸的净空
               var rBias = Math.max(0, Math.min(1, num(t.ruby_bias, 0.3)));
               var rBtm = yGo - RUBY_RUBY_RUBY_INK_HZ * aFs * 0.5 - rSlack * (1 - rBias) / 2;   // 盒底 y
@@ -1500,8 +1570,8 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
         if (it.sqz && it.sqz.length) {
           var nSq = it.sqz.length;
           var sqTop = m.rowStartY + m.rowH;                                  // 下底线
-          var sqBot = m.frame ? m.frame.y + m.frame.h : sqTop + m.cellH;     // 版框底
-          var sqSlot = Math.min(Math.max(0, sqBot - sqTop), m.cellH * 0.5) / nSq;
+          var sqBot = m.frame ? m.frame.y + m.frame.h : sqTop + col.cellH;     // 版框底
+          var sqSlot = Math.min(Math.max(0, sqBot - sqTop), col.cellH * 0.5) / nSq;
           for (var qi = 0; qi < nSq; qi++) {
             var sc = it.sqz[qi];
             var scRot = !!trotSet[sc];
@@ -1521,13 +1591,32 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
         continue;
       }
 
-      /* --- 注释徽标：随文牌记式小徽标（{} 标记），span≥1 格，居中所占格块 --- */
+      /* --- 注释徽标：随文小徽标（{} 标记），按**所在网格的字格**占位（用户 2026-10-02） --- */
       if (it.type === 'badge') {
         var lenB = String(it.text).length;
-        var boxB = (it.span || 1) * m.cellH;
-        var bReq = num(t.badge_size, 0) > 0 ? num(t.badge_size, 0) : fs * 0.72;
+        var boxB = (it.span || 1) * col.cellH;
+        /* 批注列内徽标（it.accent）：与夹注内徽标**同一套几何**——徽标在哪就用哪的字格：
+           字形 = 批文格高 col.cellH（与批文字同大，只有颜色不同），框高 = 字数 × 批文格高
+           （框线压格线、零衬距），框宽上限 = 整列宽。字体随所在列（accent_font_family）。
+           不再用「正文字号×0.72」（框比批文还大）或「accentFs×0.95」（凭空缩 5%）这类自造系数。 */
+        if (it.accent) {
+          if (it.accentHead) {
+            /* 批文外徽标（{徽标} 紧邻 []，tokenize 期并入 accent token 列头）：
+               与夹注外徽标同一套花框（牌记式）——尺寸取**同一组参数**
+               （badgeFlowerReqSize：badge_size / 正文字号，不随批文格；用户 2026-10-02
+               「一组参数就控制了」）；占格已由 paginate 按花框实高折算够，
+               此处只兜底「高不溢占格」。 */
+            var bReq = badgeFlowerReqSize(fs, t.badge_size);
+            var bFit = Math.min(bReq, boxB / (lenB * 0.78 + 0.32));
+            out.push(badgeSvg(t, cx, m.rowStartY + it.row * col.cellH + boxB / 2, bFit, it.text, t.text_font_family));
+            continue;
+          }
+          out.push(badgeSvg(t, cx, m.rowStartY + it.row * col.cellH + boxB / 2, col.cellH, it.text, t.accent_font_family, 1, m.colW));
+          continue;
+        }
+        var bReq = badgeFlowerReqSize(fs, t.badge_size);   // 正文 / 夹注外 花框：同一真源
         var bFit = Math.min(bReq, boxB / (lenB + 0.32));   // 高不溢占格（宽随设定，所见即所得）
-        out.push(badgeSvg(t, cx, m.rowStartY + it.row * m.cellH + boxB / 2, bFit, it.text, t.text_font_family));
+        out.push(badgeSvg(t, cx, m.rowStartY + it.row * col.cellH + boxB / 2, bFit, it.text, t.text_font_family));
         continue;
       }
 
@@ -1651,13 +1740,13 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
           for (var j = 0; j < line.length; j++) {
             var ch = line[j];
             if (typeof ch === 'object') {
-              /* 夹注内徽标：始终随夹注字体与字号（badge_size/badge_font 设置仅作用于正文徽标）。
-                 按字数跨格（与正文徽标同规则）→ 单字/多字徽标的字号一致（≈0.95×注字号），不随字数缩。
-                 bFitC 钳制：高不超 len 格、宽不超半列宽 */
+              /* 夹注内徽标 = 按**所在网格的字格**量（与批注列内徽标同一套，用户 2026-10-02）：
+                 字数 = 格数（len 个注字格）；字形 = 注字格高 rowCell（框宽上限 = 注行宽 = 半列）；
+                 框高 = len × 注字格高（框线压在格线上）。随夹注字体；
+                 badge_size / badge_font 仅作用于**正文**徽标。 */
               var lenCB = String(ch.badge).length;
-              var bFitC = Math.min(fsC * 0.95, lenCB * rowCell / (lenCB + 0.08), m.colW / 2 / 1.15);
               var ycB = top + (idx + lenCB / 2) * rowCell;
-              out.push(badgeSvg(t, rx, ycB, bFitC, ch.badge, t.comment_font_family, 1));
+              out.push(badgeSvg(t, rx, ycB, rowCell, ch.badge, t.comment_font_family, 1, quarter * 2));
               idx += lenCB; pGY = ycB; pGX = rx;
               continue;
             }
@@ -2133,6 +2222,37 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
   function mt(t) { return num(t.margins_top, 0); }
   function ml(t) { return num(t.margins_left, 0); }
 
+  /* 批文生效字号（单一真源）：缺省 = min(批文格高, 列宽 × 字号列宽上限)。
+     批文格高 bandCellH = 正文格高 / accent_density（N 整数）。
+     渲染缺省(drawColumn)、预览读数(PreviewPanel)、参数面板投影(InspectorPanel) 三处共用此式，
+     避免公式副本漂移。参数面板「批文字号」无显式值时即显示本函数的返回值。 */
+  function accentDefaultFontSize(bandCellH, colW, ratio) {
+    return Math.min(bandCellH, colW * num(ratio, 0.96));
+  }
+
+  /* 花框（牌记式）字位（单一真源，用户 2026-10-02：「做一套就好，一组参数控制」）：
+     正文徽标 / 夹注外徽标 / 批文外徽标 三处**同一尺寸**，只随徽标参数
+     （badge_size，缺省 = 正文字号 × 0.72）与正文字号 fs，**不随所在网格**
+     （正文字格 / 注字格 / 批文格）。
+     旧行为：批文外花框延用「占格高」折算 boxB/(字数+0.32)，而批文格 = 正文格 / N
+     （N = accent_density）→ 批文前花框只有 1/N 大（用户截图：明显小于夹注前花框）。 */
+  function badgeFlowerReqSize(fs, badgeSize) {
+    return num(badgeSize, 0) > 0 ? num(badgeSize, 0) : fs * 0.72;
+  }
+  /* 花框实高（外框）= 字数 × 0.78×字位 + 2 × 0.16×字位 —— 与 badgeSvg 的 gs/pad 同源。 */
+  function badgeFlowerFrameHeight(size, len) {
+    return len * size * 0.78 + size * 0.32;
+  }
+  /* 花框**占格**（单一真源）：花框徽标在**正文字格**里占几格 —— 与正文徽标同一算式
+     （字位 × (字数 + 0.32) ÷ 正文格高，向上取整）。
+     批文列再按 `正文字格数 × N`（N = accent_density）换算成本列批文格数，
+     于是「批文前花框」占的**正文字格数**与「正文 / 夹注前花框」一致
+     （用户 2026-10-02：译文也要占 2 个正文字格；此前用花框实高 ÷ 批文格高 = 3 批文格
+      = 1.5 正文字格，比正文/夹注前的 2 格少一半，截图可见）。 */
+  function badgeFlowerCellCount(fs, badgeSize, len, cellH) {
+    return Math.max(1, Math.ceil(badgeFlowerReqSize(fs, badgeSize) * (len + 0.32) / cellH - 1e-9));
+  }
+
   /* ---------------------------------------------------------------- 导出 */
   export const LayoutEngine = {
     FONT_STACKS: FONT_STACKS,
@@ -2140,6 +2260,10 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     familyStack: familyStack,
     DEFAULT_TEMPLATE: DEFAULT_TEMPLATE,
     computeMetrics: computeMetrics,
+    accentDefaultFontSize: accentDefaultFontSize,
+    badgeFlowerReqSize: badgeFlowerReqSize,
+    badgeFlowerFrameHeight: badgeFlowerFrameHeight,
+    badgeFlowerCellCount: badgeFlowerCellCount,
     columns: columns,
     tokenize: tokenize,
     paginate: paginate,
