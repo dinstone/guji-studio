@@ -6,6 +6,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   proj, projectDir, recents, switchProject, removeRecentAt,
   openProjectDialog, refreshRecents, openProjectInfo, toast, saveProjectDialog,
+  openAssetManager,
 } from '../stores/app'
 import { openFolder } from '../platform/wails'
 import NewProjectWizard from './NewProjectWizard.vue'
@@ -91,6 +92,9 @@ onBeforeUnmount(() => {
       <div class="ps-top">
         <button class="ps-btn" @click="openInfo">
           <span class="ico">ℹ</span>项目信息
+        </button>
+        <button class="ps-btn" @click="runClose(openAssetManager)">
+          <span class="ico">🖼</span>素材管理
         </button>
         <button class="ps-btn" @click="runClose(saveProjectDialog)">
           <span class="ico">💾</span>保存项目

@@ -237,3 +237,15 @@ export async function readProjectAsset(dir: string, name: string): Promise<strin
 export async function listProjectAssets(dir: string): Promise<string[]> {
   return (ProjectSvc as any).ListProjectAssets(dir)
 }
+/** 列出 assets/ 中「未在任何配置/正文引用」的孤儿文件名（一键清理前先盘点） */
+export async function findOrphanAssets(dir: string): Promise<string[]> {
+  return (ProjectSvc as any).FindOrphanAssets(dir)
+}
+/** 安全删除单个素材：移入 trash/（可找回），不直接 rm */
+export async function deleteProjectAsset(dir: string, name: string): Promise<void> {
+  return (ProjectSvc as any).DeleteProjectAsset(dir, name)
+}
+/** 一键清理孤儿素材：全部移入 trash/，返回被移走的文件名 */
+export async function cleanOrphanAssets(dir: string): Promise<string[]> {
+  return (ProjectSvc as any).CleanOrphanAssets(dir)
+}

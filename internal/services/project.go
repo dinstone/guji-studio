@@ -562,6 +562,85 @@ func (s *ProjectService) ListProjectAssets(dir string) ([]string, error) {
 	return out, nil
 }
 
+// ---------------------------------------------------------------- 孤儿素材扫描 / 清理
+//
+// 程序无「引用登记表」：素材文件名只散落在书级配置（book.gvs / setting.json / publish.json
+// 的书级默认、卷/单元/册 template 补丁、特殊页默认、包装叶 patch）与正文里。故孤儿判定 =
+// 「文件名在所有配置文本里都搜不到」。保守：任一出现即保留，绝不误删正在用的素材。
+
+// FindOrphanAssets 列出 assets/ 中「没有任何配置/正文引用」的图片文件名（已排序）。
+// 目录不存在或空 → 返回 nil（非错误）。
+func (s *ProjectService) FindOrphanAssets(dir string) ([]string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return nil, nil
+	}
+	ents, err := os.ReadDir(filepath.Join(dir, assetsDir))
+	if err != nil {
+		return nil, nil // 无 assets 目录 = 无孤儿
+	}
+	var names []string
+	for _, e := range ents {
+		if e.IsDir() || !imageExts[strings.ToLower(filepath.Ext(e.Name()))] {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	// 汇总所有「可能引用文件名」的文本作为 haystack（子串匹配）
+	var hay strings.Builder
+	for _, f := range []string{bookFile, settingFile, publishFile} {
+		if b, rerr := os.ReadFile(filepath.Join(dir, f)); rerr == nil {
+			hay.Write(b)
+			hay.WriteByte('\n')
+		}
+	}
+	for _, sub := range []string{textDir, guideDir, appendixDir} {
+		if d, derr := os.ReadDir(filepath.Join(dir, sub)); derr == nil {
+			for _, e := range d {
+				if e.IsDir() {
+					continue
+				}
+				if b, rerr := os.ReadFile(filepath.Join(dir, sub, e.Name())); rerr == nil {
+					hay.Write(b)
+					hay.WriteByte('\n')
+				}
+			}
+		}
+	}
+	haystack := hay.String()
+	var orphans []string
+	for _, n := range names {
+		if !strings.Contains(haystack, n) {
+			orphans = append(orphans, n)
+		}
+	}
+	sort.Strings(orphans)
+	return orphans, nil
+}
+
+// DeleteProjectAsset 安全删除单个素材：移入 trash/（保留原文件名，不带时间戳，免得影响系统预览），不直接 rm。
+func (s *ProjectService) DeleteProjectAsset(dir, name string) error {
+	if strings.TrimSpace(dir) == "" || strings.TrimSpace(name) == "" {
+		return fmt.Errorf("项目未保存或文件名为空")
+	}
+	moveAssetToTrash(dir, filepath.Join(assetsDir, filepath.Base(name)))
+	return nil
+}
+
+// CleanOrphanAssets 一键清理：找出孤儿素材并全部移入 trash/（保留原文件名，不带时间戳），返回被移走的文件名。
+func (s *ProjectService) CleanOrphanAssets(dir string) ([]string, error) {
+	orphans, err := s.FindOrphanAssets(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range orphans {
+		moveAssetToTrash(dir, filepath.Join(assetsDir, n))
+	}
+	return orphans, nil
+}
+
 // trimAlphaPNG 裁掉 PNG 四周完全透明的边（内容边界 = alpha bbox），返回重新编码的 PNG。
 // 非 PNG、解码失败、整幅透明或本来就没有透明边时原样返回 —— 宁可不动，不能弄丢素材。
 func trimAlphaPNG(data []byte) []byte {
@@ -1099,6 +1178,34 @@ func moveToTrash(dir, rel string) {
 			break
 		}
 		dst = filepath.Join(trashBase, fmt.Sprintf("%s.%s-%d", name, stamp, i))
+	}
+	_ = os.Rename(src, dst)
+}
+
+// moveAssetToTrash 把素材移入 trash/ 但保留原文件名（不带时间戳，免得影响系统预览 / 找回时识别）；
+// 若 trash/ 下已存在同名文件，则追加 " (n)" 数字序号（n 从 1 递增）避免覆盖。静默失败（垃圾回收不该阻塞保存）。
+func moveAssetToTrash(dir, rel string) {
+	src := filepath.Join(dir, rel)
+	if _, err := os.Stat(src); err != nil {
+		return
+	}
+	trashBase := filepath.Join(dir, trashDir)
+	if err := os.MkdirAll(trashBase, 0o755); err != nil {
+		return
+	}
+	name := filepath.Base(rel)
+	dst := filepath.Join(trashBase, name)
+	if _, err := os.Lstat(dst); err == nil {
+		// 已存在同名 → "foo (1).png" / "foo (2).png" ...
+		ext := filepath.Ext(name)
+		stem := name[:len(name)-len(ext)]
+		for i := 1; ; i++ {
+			cand := filepath.Join(trashBase, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+			if _, e2 := os.Lstat(cand); e2 != nil {
+				dst = cand
+				break
+			}
+		}
 	}
 	_ = os.Rename(src, dst)
 }

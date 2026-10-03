@@ -875,6 +875,11 @@ export function closeProjectInfo() {
   if (projectDir.value) plat.touchRecent(projectDir.value, proj.name).catch(() => {})
 }
 
+/** 素材管理浮层（列出/清理 assets 中未被引用的图片）；入口在项目菜单「项目信息」下方 */
+export const assetManagerOpen = ref(false)
+export function openAssetManager() { assetManagerOpen.value = true }
+export function closeAssetManager() { assetManagerOpen.value = false }
+
 /** 关于 / 赞助对话框（远程拉取赞助者名单） */
 export const aboutOpen = ref(false)
 export function openAbout() { aboutOpen.value = true }
