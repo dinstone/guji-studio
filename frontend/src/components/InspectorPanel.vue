@@ -72,9 +72,8 @@ const E = LayoutEngine
 const toNum = (v: any, d: number) => { const n = parseFloat(v); return isFinite(n) ? n : d }
 /* 当前密度下的生效字号（调用引擎单一真源，与渲染缺省完全同式） */
 const accentFsAuto = computed(() => {
-  const N = Math.max(1, Math.round(toNum(tplEdit.accent_density, 2)))
   const m: any = E.computeMetrics(tplEdit)
-  return Math.round(E.accentDefaultFontSize(m.cellH / N, m.colW, tplEdit.text_col_ratio) * 10) / 10
+  return Math.round(E.accentDefaultFontSize(tplEdit, m) * 10) / 10
 })
 /* 输入框显示值：显式值优先，否则投影生效值 */
 const dispAccentFs = computed(() => {
@@ -90,11 +89,7 @@ function onAccentFsInput(e: Event) {
   if (isFinite(n) && n > 0) tplEdit.accent_font_size = n
   else el.value = String(dispAccentFs.value)
 }
-/* 改「批文密度」→ 强制接管：把新生效值写回批文字号（成为显式值） */
-function onNumChange(k: string) {
-  if (k !== 'accent_density') return
-  tplEdit.accent_font_size = accentFsAuto.value
-}
+  // onNumChange 已删（2026-10-03）：accent_density 撤，批文纯字号驱动，无「改密度接管字号」逻辑
 
 /* 把当前图书版式导入模板库（内容字段在 store 内剥离） */
 async function saveAsTpl() {
@@ -230,7 +225,7 @@ const paperHint = computed(() => {
                     <span v-if="it.unit" class="unit">{{ it.unit }}</span>
                   </template>
                   <template v-else-if="it.type === 'num'">
-                    <input v-model.number="tplEdit[it.k]" type="number" :min="it.min" :max="it.max" :step="it.step" @change="onNumChange(it.k)">
+                    <input v-model.number="tplEdit[it.k]" type="number" :min="it.min" :max="it.max" :step="it.step">
                     <span v-if="it.unit" class="unit">{{ it.unit }}</span>
                   </template>
                   <template v-else-if="it.type === 'bool'">

@@ -169,8 +169,7 @@ const layout = computed(() => {
   if (!t) return null
   const m: any = E.computeMetrics(t)
   const accentFamily = t.accent_font_family || t.text_font_family
-  const aN = Math.max(1, Math.round(toNum(t.accent_density, 2)))
-  const accentSize = toNum(t.accent_font_size, E.accentDefaultFontSize(m.cellH / aN, m.colW, t.text_col_ratio))
+  const accentSize = toNum(t.accent_font_size, E.accentDefaultFontSize(t, m))
   return {
     contentW: r0(m.content.w), contentH: r0(m.content.h),
     gutter: r0(m.centerW),

@@ -160,7 +160,6 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     /* 夹注：comment_ydis 默认跟随正文行距 → 双行夹注严格占 1 个正文字位（栅格锁前提） */
     comment_size_auto: 1, comment_size_ratio: 0.5, comment_font1_size: 45,
     comment_ydis: 1.05, comment_font_color: '#3a3a3a', comment_font_family: 'song_tc',
-    accent_density: 2,            // 批文独立列密度：1 个正文格容纳 N 个批文格（整数；bandCellH = 正文格高 / N）
     /* 版心文字 */
     title_text: '图书名称', title_postfix: '卷X', title_volnames: '', if_tpcenter: 'right',
     title_font_size: 96, title_y: 1013, title_ydis: 1.05, title_color: '#141414',
@@ -677,10 +676,9 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     var wrapIndent = Math.min(num(t.wrap_indent, 0), m.rowNum - 1);
 
     /* 批文独立列：每列自带 cellH/rowNum。body 列用正文网格；批文列用 band 网格。
-       bandCellH = cellH / N（N = accent_density，整数 → 批文格线压正文格线）。 */
-    var aDensity = Math.max(1, Math.round(num(t.accent_density, 2)));
-    var bandCellH = m.cellH / aDensity;
-    var bandRowNum = m.rowNum * aDensity;
+       批文格高由「批文字号反推 + 整数格锁」得出（accentBandCellH），不再 = 正文格高 / N。 */
+    var bandCellH = accentBandCellH(t, m);
+    var bandRowNum = Math.round((m.cellH * m.rowNum) / bandCellH);
     var curMode = 'body', curCellH = m.cellH, curRowNum = m.rowNum;
     function applyCurGrid() { var c = cur.cols[colIdx]; if (c) { c.cellH = curCellH; c.rowNum = curRowNum; } }
 
@@ -888,13 +886,13 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
             var abspan = abn;
             if (ac.accentHead) {
               /* 批文**外**徽标（{徽标} 紧邻 []）走花框，尺寸与正文/夹注外**同一组参数**
-                 （不随批文格，见 badgeFlowerReqSize），**占格也按正文字格量**
-                 （badgeFlowerCellCount → 与正文/夹注外的花框占同样多的正文字格），
-                 再 × N 换算成本列批文格数——花框才不会比正文/夹注前的小一半、
-                 也不会压住下面的批文（用户 2026-10-02：译文也要占 2 个正文字格）。 */
+                 （不随批文格，见 badgeFlowerReqSize）；占格按花框实高折算成本列批文格数
+                 （badgeFlowerCellCount 给正文字格数，再 × 正文格高/批文格高 换算）
+                 ——花框不会比正文/夹注前小一半，也不压下面批文
+                 （用户 2026-10-02：译文也要占 2 正文字格；改后 N 已撤，换算比 = m.cellH/bandCellH）。 */
               var abFs = m.textFs != null ? m.textFs : m.fontSize;
-              var abCells = badgeFlowerCellCount(abFs, t.badge_size, abn, m.cellH);   // 正文字格数
-              abspan = Math.min(curRowNum, Math.max(abn, abCells * aDensity));        // → 本列批文格数
+              var abCells = badgeFlowerCellCount(abFs, t.badge_size, abn, m.cellH);   // 正文字格数（花框实高）
+              abspan = Math.min(curRowNum, Math.max(abn, Math.ceil(abCells * (m.cellH / bandCellH)))); // 正文字格→批文格
             }
             if (rowPos + abspan > curRowNum) nextCol(0);
             cur.cols[colIdx].items.push({ type: 'badge', text: ac.badge, row: rowPos, span: abspan, accent: true, accentHead: !!ac.accentHead, _pos: (tk.posArr && tk.posArr[ai] != null ? tk.posArr[ai] : tk.pos) });
@@ -1398,7 +1396,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     var fontT = familyStack(t.text_font_family);
     /* 批文样式（[] 包裹片段）：默认 = 正文字体 + 正文字号×0.9 + 正文颜色；可被 accent_* 覆盖 */
     var accentFont = familyStack(t.accent_font_family || t.text_font_family);
-    var accentFs = num(t.accent_font_size, accentDefaultFontSize(col.cellH, m.colW, t.text_col_ratio));
+    var accentFs = num(t.accent_font_size, accentDefaultFontSize(t, m));
     var accentColor = t.accent_font_color || t.text_font_color;
     var fontC = familyStack(t.comment_font_family);
     /* 注音：横排西文衬线小字（绝不走 foreignObject/writing-mode，否则会被竖排旋转） */
@@ -2222,20 +2220,33 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
   function mt(t) { return num(t.margins_top, 0); }
   function ml(t) { return num(t.margins_left, 0); }
 
-  /* 批文生效字号（单一真源）：缺省 = min(批文格高, 列宽 × 字号列宽上限)。
-     批文格高 bandCellH = 正文格高 / accent_density（N 整数）。
+  /* 批文格高（单一真源）：批文字号反推 + 整数格锁。
+     字占格比沿用正文（glyphRatio = 正文字号 / 正文格高），批文视觉疏密与正文同口径；
+     缺省批文字号 = 正文字号 × 0.65（不密的好起点，用户可用绝对字号覆盖）。
+     理想格高 idealBand = 缺省字号 / glyphRatio；整数格锁 bandRowNum = max(正文字数, round(版心高 / idealBand))，
+     bandCellH = 版心高 / bandRowNum（整除版心 → 尾对齐），且 clamp ≤ 正文格高（批文格不高过正文）。
+     不再用 N 除法（bandCellH = 正文/N），批文字号可独立控制、不被正文锁死。 */
+  function accentBandCellH(t, m) {
+    var glyphRatio = m.fontSize / m.cellH;
+    var af = num(t.accent_font_size, 0) > 0 ? num(t.accent_font_size, 0) : m.fontSize * 0.65;
+    var plateH = m.cellH * m.rowNum;
+    var idealBand = af / glyphRatio;
+    var bandRowNum = Math.max(m.rowNum, Math.max(1, Math.round(plateH / idealBand)));
+    return plateH / bandRowNum;
+  }
+  /* 批文生效字号（单一真源）：缺省 = 整数格锁后的批文格高 × 字占格比（= 用户字号回弹值）。
      渲染缺省(drawColumn)、预览读数(PreviewPanel)、参数面板投影(InspectorPanel) 三处共用此式，
      避免公式副本漂移。参数面板「批文字号」无显式值时即显示本函数的返回值。 */
-  function accentDefaultFontSize(bandCellH, colW, ratio) {
-    return Math.min(bandCellH, colW * num(ratio, 0.96));
+  function accentDefaultFontSize(t, m) {
+    return accentBandCellH(t, m) * (m.fontSize / m.cellH);
   }
 
   /* 花框（牌记式）字位（单一真源，用户 2026-10-02：「做一套就好，一组参数控制」）：
      正文徽标 / 夹注外徽标 / 批文外徽标 三处**同一尺寸**，只随徽标参数
      （badge_size，缺省 = 正文字号 × 0.72）与正文字号 fs，**不随所在网格**
      （正文字格 / 注字格 / 批文格）。
-     旧行为：批文外花框延用「占格高」折算 boxB/(字数+0.32)，而批文格 = 正文格 / N
-     （N = accent_density）→ 批文前花框只有 1/N 大（用户截图：明显小于夹注前花框）。 */
+     新模型（2026-10-03）：批文格高改由「批文字号反推 + 整数格锁」得出，与正文格高解耦；
+     但花框尺寸仍以正文字号为基准（用户要三处一套参数），故此处不受影响。 */
   function badgeFlowerReqSize(fs, badgeSize) {
     return num(badgeSize, 0) > 0 ? num(badgeSize, 0) : fs * 0.72;
   }
@@ -2244,11 +2255,9 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     return len * size * 0.78 + size * 0.32;
   }
   /* 花框**占格**（单一真源）：花框徽标在**正文字格**里占几格 —— 与正文徽标同一算式
-     （字位 × (字数 + 0.32) ÷ 正文格高，向上取整）。
-     批文列再按 `正文字格数 × N`（N = accent_density）换算成本列批文格数，
-     于是「批文前花框」占的**正文字格数**与「正文 / 夹注前花框」一致
-     （用户 2026-10-02：译文也要占 2 个正文字格；此前用花框实高 ÷ 批文格高 = 3 批文格
-      = 1.5 正文字格，比正文/夹注前的 2 格少一半，截图可见）。 */
+     （字位 × (字数 + 0.32) ÷ 正文格高，向上取整），返回「正文字格数」。
+     批文列再按 `正文字格数 × (正文格高 / 批文格高)` 换算成本列批文格数（调用点 paginate
+     的 abspan 已做）；N 已撤（2026-10-03），换算比不再恒等于 N。 */
   function badgeFlowerCellCount(fs, badgeSize, len, cellH) {
     return Math.max(1, Math.ceil(badgeFlowerReqSize(fs, badgeSize) * (len + 0.32) / cellH - 1e-9));
   }
@@ -2261,6 +2270,7 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
     DEFAULT_TEMPLATE: DEFAULT_TEMPLATE,
     computeMetrics: computeMetrics,
     accentDefaultFontSize: accentDefaultFontSize,
+    accentBandCellH: accentBandCellH,
     badgeFlowerReqSize: badgeFlowerReqSize,
     badgeFlowerFrameHeight: badgeFlowerFrameHeight,
     badgeFlowerCellCount: badgeFlowerCellCount,

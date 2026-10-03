@@ -176,9 +176,8 @@ const gComment: SchemaGroup = { id: 'comment', title: '夹注（双行小字）'
 
 /* 八·批文（逗号类标点收口到「标点处理」组，此处只留样式） */
 const gAccent: SchemaGroup = { id: 'accent', title: '批文样式（[] 标记）', open: 0, items: [
-  { k: 'accent_font_family', lb: '批文字体', type: 'fam', tip: '缺省 = 正文字体（[] 包裹内容默认同正文；字号缺省 = 批文格高）' },
-  { k: 'accent_density', lb: '批文密度', type: 'num', min: 1, max: 6, step: 1, tip: '批文为独立列：1 个正文格容纳 N 个批文格（bandCellH = 正文格高 / N，整数锁、压正文格线）。改 N 会带动缺省批文字号' },
-  { k: 'accent_font_size', lb: '批文字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', tip: '缺省 = 批文格高（填满批文格，密排）；手动指定可覆盖，不影响批文密度' },
+  { k: 'accent_font_family', lb: '批字体', type: 'fam', tip: '缺省 = 正文字体（[] 包裹内容默认同正文；字号缺省 = 批文格高）' },
+  { k: 'accent_font_size', lb: '批文字号', type: 'num', min: 6, max: 200, step: 1, unit: 'px', tip: '绝对字号；缺省 = 正文字号 × 0.65（反推整数格锁），可覆盖' },
   { k: 'accent_font_color', lb: '批文颜色', type: 'color', tip: '缺省 = 正文颜色' },
 ]}
 
