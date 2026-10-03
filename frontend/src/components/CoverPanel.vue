@@ -64,7 +64,7 @@ function onXuan(e: Event) {
   const on = (e.target as HTMLInputElement).checked
   cfg.bg = on ? 'textures/xuan.jpg' : ''
 }
-/* 底图：与图章/插图一致，经系统选图对话框（importImage）存进项目 assets/，配置只存文件名；
+/* 底图：与图章/插图一致，经系统选图对话框（importImage）存进（已在 assets/ 则直接复用、不复制）项目 assets/，配置只存文件名；
  * 预览经 core/assets 缓存解析为 dataURL，导出前 warmAssets 一并预热。清除 = 恢复纯色（bg 置空）。 */
 async function pickBg() {
   if (!projectDir.value) {
@@ -81,7 +81,7 @@ async function pickBg() {
   }
 }
 const isCustomBg = computed(() => !!cfg.bg && cfg.bg !== 'textures/xuan.jpg')
-/* 扉页图章 / 尾页插图：经系统选图对话框（importImage）存进项目 assets/，配置只存文件名；
+/* 扉页图章 / 尾页插图：经系统选图对话框（importImage）存进（已在 assets/ 则直接复用、不复制）项目 assets/，配置只存文件名；
  * 位置/缩放用归一化默认，预览中拖动调位置、拖右下角缩放。仅在该叶 tab 可上传（图章只归扉页、插图只归尾页）。 */
 async function pickImg(key: 'stamp' | 'illus') {
   if (!projectDir.value) {

@@ -267,7 +267,7 @@ const gPunc: SchemaGroup = { id: 'punc', title: '标点处理（正文 · 夹注
 const gWatermark: SchemaGroup = { id: 'watermark', title: '纸张', open: 0, items: [
   { k: 'canvas_color', lb: '纸色', type: 'color' },
   { k: 'xuanwen', lb: '宣纹', type: 'bool', link: 'canvas_background_image', onval: 'textures/xuan.jpg', tip: '打开=底图使用宣纸纹理（textures/xuan.jpg），关闭=恢复纯色（与「底图」字段同步）' },
-  { k: 'canvas_background_image', lb: '底图', type: 'text', ph: '留空=纯色；填图片路径/dataURL=拉伸铺满纸张' },
+  { k: 'canvas_background_image', lb: '底图', type: 'asset', tip: '留空=纯色；点「选择图片」上传项目素材（拉伸铺满整张纸）；也可填相对路径/dataURL' },
   { k: 'watermark_src', lb: '水印图', type: 'asset',
     tip: '盖在纸张上的图片，压在版框与文字之下，正文每叶都出现；留空 = 不输出。'
       + '水印范围只含正文叶（封面/扉页/牌记/尾页不参与）' },

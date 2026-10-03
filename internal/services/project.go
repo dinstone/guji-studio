@@ -505,6 +505,16 @@ func (s *ProjectService) ImportImage(dir string) ([]string, error) {
 	}
 	var out []string
 	for _, p := range paths {
+		// 若选中的文件本就属于本项目 assets/：直接复用文件名，不再复制。
+		// 否则会命中 used 重名逻辑生成「xxx (1).png」副本，既冗余又会让原文件被判成孤儿。
+		if strings.EqualFold(filepath.Clean(filepath.Dir(p)), filepath.Clean(dst)) {
+			n := safeFileName(filepath.Base(p))
+			if !imageExts[strings.ToLower(filepath.Ext(n))] {
+				continue
+			}
+			out = append(out, n)
+			continue
+		}
 		data, rerr := os.ReadFile(p)
 		if rerr != nil {
 			continue

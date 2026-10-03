@@ -1958,12 +1958,22 @@ import { FISH_CLOVER_PNG } from './fishCloverAsset.ts';
 
     /* 纸张 */
     o.push('<rect x="0" y="0" width="' + f(m.W) + '" height="' + f(m.H) + '" fill="' + t.canvas_color + '"/>');
-    /* 底图：直接填图片路径/dataURL = 上下左右拉伸铺满整幅纸张（适应任何纸张尺寸） */
-    if (t.canvas_background_image) {
-      /* 背景图优先用预取的 dataURL 内联：同步解码、无网络请求、重渲不闪；
-         cache 未就绪（首次/跨域污染）时回退原 url（preloadTexture 会后台预热） */
-      const bgHref = textureCache.get(t.canvas_background_image) || t.canvas_background_image
-      o.push('<image x="0" y="0" width="' + f(m.W) + '" height="' + f(m.H) + '" href="' + esc(bgHref) + '" preserveAspectRatio="none"/>')
+    /* 底图：图片路径 / dataURL / 项目 assets/ 文件名 → 上下左右拉伸铺满整幅纸张（适应任何纸张尺寸） */
+    const bgSrc = t.canvas_background_image
+    if (bgSrc) {
+      /* 三类值解析：
+         · 内置宣纸纹理（含 / 的相对路径）与内联 dataURL → 走 textureCache 内联（preloadTexture 后台预热、防闪）；
+         · 项目 assets/ 文件名（无 /、非 dataURL）→ 经素材解析器取 dataURL，未就绪本帧不画、预热后重渲可见。 */
+      let bgHref
+      if (bgSrc.startsWith('data:') || bgSrc.includes('/')) {
+        bgHref = textureCache.get(bgSrc) || bgSrc
+      } else {
+        const info = assetOf(bgSrc)
+        bgHref = info && info.url ? info.url : null
+      }
+      if (bgHref) {
+        o.push('<image x="0" y="0" width="' + f(m.W) + '" height="' + f(m.H) + '" href="' + esc(bgHref) + '" preserveAspectRatio="none"/>')
+      }
     }
 
     /* 叶面水印：图片素材压在版框与文字之下（位置/大小按纸张比例，随纸张自动缩放） */
